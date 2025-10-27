@@ -1,0 +1,1 @@
+### 1. viite.config.js 需要处理监听 packages/* 文件变化实现热更新

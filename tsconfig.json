@@ -1,0 +1,32 @@
+{
+    "compileOnSave": true,
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "ESNext",
+        "useDefineForClassFields": true,
+        "allowSyntheticDefaultImports": true,
+        "noImplicitThis": false,
+        "allowJs": true,
+        "jsx": "react-jsx",
+        // "jsx": "react",
+        "forceConsistentCasingInFileNames": true,
+        "declaration": true,
+        "declarationMap": true,
+        "lib": ["ESNext", "DOM"],
+        "moduleResolution": "Node",
+        "strict": true,
+        "noImplicitAny": false,
+        "sourceMap": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "noEmit": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "skipLibCheck": true,
+        "baseUrl": "./packages",
+        "paths": {
+            "ReactDOMHostConfig": ["./react-dom/src/client/ReactDOMHostConfig.ts"]
+        }
+    },
+}
