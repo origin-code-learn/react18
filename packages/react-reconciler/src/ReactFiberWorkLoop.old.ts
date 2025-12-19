@@ -1,4 +1,4 @@
-import { deferRenderPhaseUpdateToNextBatch, disableSchedulerTimeoutInWorkLoop, enableProfilerNestedUpdatePhase, enableProfilerTimer } from "shared/ReactFeatureFlags";
+import { deferRenderPhaseUpdateToNextBatch, disableSchedulerTimeoutInWorkLoop, enableProfilerCommitHooks, enableProfilerNestedUpdatePhase, enableProfilerTimer, enableSchedulingProfiler, enableTransitionTracing } from "shared/ReactFeatureFlags";
 import { getHighestPriorityLane, getLanesToRetrySynchronouslyOnError, getNextLanes, getTransitionsForLanes, includesBlockingLane, includesExpiredLane, includesSomeLane, Lane, Lanes, markRootFinished, markRootUpdated, markStarvedLanesAsExpired, mergeLanes, NoLane, NoLanes, NoTimestamp, SyncLane } from "./ReactFiberLane.old";
 import { Fiber, FiberRoot } from "./ReactInternalTypes";
 import { ConcurrentMode, NoMode } from "./ReactTypeOfMode";
@@ -26,7 +26,7 @@ import { resetContextDependencies } from "./ReactFiberNewContext.old";
 import { beginWork } from "./ReactFiberBeginWork.old";
 import { BeforeMutationMask, HostEffectMask, Incomplete, LayoutMask, MutationMask, NoFlags, PassiveMask } from "./ReactFiberFlags";
 import { completeWork } from "./ReactFiberCompleteWork.old";
-import { commitBeforeMutationEffects, commitLayoutEffects, commitMutationEffects } from "./ReactFiberCommitWork.old";
+import { commitBeforeMutationEffects, commitLayoutEffects, commitMutationEffects, commitPassiveMountEffects, commitPassiveUnmountEffects } from "./ReactFiberCommitWork.old";
 import { flushSyncCallbacks, scheduleLegacySyncCallback, scheduleSyncCallback } from "./ReactFiberSyncTaskQueue.old";
 
 const {
@@ -365,7 +365,52 @@ function flushPassiveEffects() {
 }
 
 function flushPassiveEffectsImpl() {
-    debugger
+    if (rootWithPendingPassiveEffects === null) {
+        return false
+    }
+    const transitions = pendingPassiveTransitions
+    pendingPassiveTransitions = null
+
+    const root = rootWithPendingPassiveEffects
+    const lanes = pendingPassiveEffectsLanes
+    rootWithPendingPassiveEffects = null
+
+    pendingPassiveEffectsLanes = NoLanes
+
+    if ((executionContext & (RenderContext | CommitContext)) !== NoContext) {
+        throw new Error('已呈现的被动效果无法刷新。')
+    }
+
+    if (enableSchedulingProfiler) {
+        debugger
+    }
+    const prevExecutionContext = executionContext
+    executionContext |= CommitContext
+
+    commitPassiveUnmountEffects(root.current)
+    commitPassiveMountEffects(root, root.current, lanes, transitions)
+
+    if (enableProfilerTimer && enableProfilerCommitHooks) {
+        debugger
+    }
+
+    if (enableSchedulingProfiler) {
+        debugger
+    }
+
+    executionContext = prevExecutionContext
+    flushSyncCallbacks()
+
+    if (enableTransitionTracing) {
+        debugger
+    }
+    // onPostCommitRootDevTools(root)
+
+    if (enableProfilerTimer && enableProfilerCommitHooks) {
+        debugger
+    }
+    
+    return true
 }
 
 function renderRootConcurrent(root: FiberRoot, lanes: Lanes) {

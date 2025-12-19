@@ -3,7 +3,11 @@ import { isSubsetOfLanes, isTransitionLane, Lane, Lanes, mergeLanes, NoLane, NoL
 import { readContext } from "./ReactFiberNewContext.old"
 import { Dispatcher, Fiber, FiberRoot } from "./ReactInternalTypes"
 import ReactSharedInternals from "shared/ReactSharedInternals"
-import { HookFlags } from "./ReactHookEffectTags"
+import { 
+    type HookFlags, 
+    HasEffect as HookHasEffect,
+    Passive as HookPassive 
+} from "./ReactHookEffectTags"
 import { MutableSource, MutableSourceGetSnapshotFn, MutableSourceSubscribeFn } from "shared/ReactTypes"
 import { markSkippedUpdateLanes, requestEventTime, requestUpdateLane, scheduleUpdateOnFiber } from "./ReactFiberWorkLoop.old"
 import { enqueueConcurrentHookUpdate, enqueueConcurrentHookUpdateAndEagerlyBailout } from "./ReactFiberConcurrentUpdates.old"
@@ -58,6 +62,16 @@ export type Effect = {
     next: Effect
 }
 
+type StoreConsistencyCheck<T> = {
+    value: T,
+    getSnapshot: () => T
+}
+
+export type FunctionComponentUpdateQueue = {
+    lastEffect: Effect | null,
+    stores: Array<StoreConsistencyCheck<any>> | null,
+}
+
 // 局部计数器，用于追踪 `useId` 钩子的调用次数
 let localIdCounter: number = 0;
 let renderLanes: Lanes = NoLanes;
@@ -67,6 +81,24 @@ let currentHook: Hook | null = null
 let workInProgressHook: Hook | null = null
 let didScheduleRenderPhaseUpdate: boolean = false
 
+// React hook.deps 比较逻辑
+function areHookInputsEqual(
+    nextDeps: Array<any>,
+    prevDeps: Array<any> | null
+): boolean {
+    if (prevDeps === null) {
+        return false
+    }
+
+    for (let i = 0; i < prevDeps.length && i < nextDeps.length; i++) {
+        if (is(nextDeps[i], prevDeps[i])) {
+            continue
+        }
+        return false
+    }
+    return true
+}
+
 function basicStateReducer<S>(state: S, action: BasicStateAction<S>): S {
     return typeof action === 'function' ? action(state) : action
 }
@@ -74,6 +106,40 @@ function basicStateReducer<S>(state: S, action: BasicStateAction<S>): S {
 function isRenderPhaseUpdate(fiber: Fiber) {
     const alternate = fiber.alternate
     return (fiber === currentlyRenderingFiber || alternate !== null && alternate === currentlyRenderingFiber)
+}
+
+function createFunctionComponentUpdateQueue(): FunctionComponentUpdateQueue {
+    return {
+        lastEffect: null,
+        stores: null
+    }
+}
+
+function pushEffect(tag, create, destroy, deps) {
+    const effect: Effect = {
+        tag,
+        create,
+        destroy,
+        deps,
+        next: null as any
+    }
+    let componentUpdateQueue: null | FunctionComponentUpdateQueue = (currentlyRenderingFiber.updateQueue as any)
+    if (componentUpdateQueue === null) {
+        componentUpdateQueue = createFunctionComponentUpdateQueue()
+        currentlyRenderingFiber.updateQueue = (componentUpdateQueue as any)
+        componentUpdateQueue.lastEffect = effect.next = effect
+    } else {
+        const lastEffect = componentUpdateQueue.lastEffect
+        if (lastEffect === null) {
+            componentUpdateQueue.lastEffect = effect.next = effect
+        } else {
+            const firstEffect = lastEffect.next
+            lastEffect.next = effect
+            effect.next = firstEffect
+            componentUpdateQueue.lastEffect = effect
+        }
+    }
+    return effect
 }
 
 function entangleTransitionUpdate<S, A>(
@@ -184,8 +250,30 @@ function mountCallback<T>(callback: T, deps: Array<any> | void | null): T {
     debugger
 }
 
+function mountEffectImpl(
+    fiberFlags, 
+    hookFlags: HookFlags,
+    create: () => (() => void) | void,
+    deps: Array<any> | void | null
+) {
+    const hook = mountWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    currentlyRenderingFiber.flags |= fiberFlags
+    hook.memoizedState = pushEffect(
+        HookHasEffect | hookFlags,
+        create,
+        undefined,
+        nextDeps
+    )
+}
+
 function mountEffect(create: () => (() => void) | void, deps: Array<any> | void | null) {
-    debugger
+    return mountEffectImpl(
+        PassiveEffect | PassiveStaticEffect,
+        HookPassive,
+        create,
+        deps
+    )
 }
 
 function mountImperativeHandle<T>(
@@ -316,6 +404,25 @@ function updateWorkInProgressHook(): Hook {
     return workInProgressHook as Hook
 }
 
+function updateEffectImpl(fiberFlags, hookFlags, create, deps): void {
+    const hook = updateWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    let destroy = undefined
+    if (currentHook !== null) {
+        const prevEffect = currentHook.memoizedState
+        destroy = prevEffect.destroy
+        if (nextDeps !== null) {
+            const prevDeps = prevEffect.deps
+            if (areHookInputsEqual(nextDeps, prevDeps)) {
+                hook.memoizedState = pushEffect(hookFlags, create, destroy, nextDeps)
+                return
+            }
+        }
+    }
+    currentlyRenderingFiber.flags |= fiberFlags
+    hook.memoizedState = pushEffect(HookHasEffect | hookFlags, create, destroy, nextDeps)
+}
+
 /**
  * 初始化同步外部存储钩子（挂载阶段）
  * @param subscribe - 订阅函数，接收一个更新回调，返回取消订阅的函数
@@ -348,7 +455,7 @@ function updateEffect(
     create: () => (() => void) | void,
     deps: Array<any> | void | null
 ): void {
-    debugger
+    return updateEffectImpl(PassiveEffect, HookPassive, create, deps)
 }
 
 function updateImperativeHandle<T>(

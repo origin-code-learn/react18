@@ -1,15 +1,25 @@
 import { appendChildToContainer, clearContainer, Container, insertInContainerBefore, Instance, prepareForCommit, resetTextContent, supportsHydration, supportsMutation, supportsPersistence, UpdatePayload } from "ReactDOMHostConfig";
 import { Fiber, FiberRoot } from "./ReactInternalTypes";
 import { Lanes } from "./ReactFiberLane.old";
-import { enableCreateEventHandleAPI, enableSuspenseLayoutEffectSemantics } from "shared/ReactFeatureFlags";
-import { BeforeMutationMask, ContentReset, Hydrating, LayoutMask, MutationMask, NoFlags, Placement, Ref, Snapshot, Update } from "./ReactFiberFlags";
-import { ClassComponent, DehydratedFragment, ForwardRef, FunctionComponent, HostComponent, HostPortal, HostRoot, HostText, IncompleteClassComponent, LegacyHiddenComponent, MemoComponent, OffscreenComponent, Profiler, ScopeComponent, SimpleMemoComponent, SuspenseComponent, SuspenseListComponent, TracingMarkerComponent } from "./ReactWorkTags";
+import { deletedTreeCleanUpLevel, enableCache, enableCreateEventHandleAPI, enableProfilerCommitHooks, enableProfilerTimer, enableSuspenseLayoutEffectSemantics, enableTransitionTracing } from "shared/ReactFeatureFlags";
+import { BeforeMutationMask, ChildDeletion, ContentReset, Hydrating, LayoutMask, MutationMask, NoFlags, Passive, PassiveMask, Placement, Ref, Snapshot, Update } from "./ReactFiberFlags";
+import { CacheComponent, ClassComponent, DehydratedFragment, ForwardRef, FunctionComponent, HostComponent, HostPortal, HostRoot, HostText, IncompleteClassComponent, LegacyHiddenComponent, MemoComponent, OffscreenComponent, Profiler, ScopeComponent, SimpleMemoComponent, SuspenseComponent, SuspenseListComponent, TracingMarkerComponent } from "./ReactWorkTags";
 import { resolveDefaultProps } from "./ReactFiberLazyComponent.old";
 import { captureCommitPhaseError } from "./ReactFiberWorkLoop.old";
-import { ConcurrentMode, NoMode } from "./ReactTypeOfMode";
+import { ConcurrentMode, NoMode, ProfileMode } from "./ReactTypeOfMode";
 import {
     commitUpdate
 } from './ReactFiberHostConfig';
+import { 
+    NoFlags as NoHookEffect,
+    HasEffect as HookHasEffect,
+    Layout as HookLayout,
+    Insertion as HookInsertion,
+    Passive as HookPassive,
+    type HookFlags,
+} from "./ReactHookEffectTags";
+import { Transition } from "shared/ReactTypes";
+import { FunctionComponentUpdateQueue } from "./ReactFiberHooks.old";
 
 
 let focusedInstanceHandle: null | Fiber = null;
@@ -646,5 +656,296 @@ function insertOrAppendPlacementNodeIntoContainer(
                 sibling = sibling.sibling
             }
         }
+    }
+}
+
+function commitPassiveUnmountEffectsInsideOfDeletedTree_begin(
+    deletedSubtreeRoot: Fiber,
+    nearestMountedAncestor: Fiber | null
+) {
+    debugger
+}
+
+// 该函数负责 向下遍历 Fiber 树（从父节点到子节点），核心是处理 “子节点删除” 和进入子树继续遍历，不直接执行副作用，只做 “遍历引导” 和 “删除预处理”。
+function commitPassiveUnmountEffects_begin() {
+    // 循环便利: 只要还有需要处理的 Fiber 节点（nextEffect 不为 null）
+    while (nextEffect !== null) {
+        const fiber = nextEffect  // 当前正在处理的 Fiber 节点
+        const child = fiber.child // 当前节点的子 Fiber 节点
+
+        // 1. 处理“子节点删除”：如果当前节点有 ChildDeletion 标记（存在要删除的子节点）
+        if ((nextEffect.flags & ChildDeletion) !== NoFlags) {
+            const deletions = fiber.deletions // 存储要删除的子节点列表
+            if (deletions !== null) {
+                // 遍历所有要删除的字节点，处理其内部的被动卸载副作用
+                for (let i = 0; i < deletions.length; i++) {
+                    const fiberToDelete = deletions[i] // 要删除的字节点
+                    nextEffect = fiberToDelete // 移动指针到要删除的节点
+                    // 递归处理被删除节点的子树（深度优先），执行其中的卸载副作用
+                    commitPassiveUnmountEffectsInsideOfDeletedTree_begin(fiberToDelete, fiber)
+                }
+                // 优化逻辑：清理被删除节点的链表引用，避免内存泄漏
+                if (deletedTreeCleanUpLevel >= 1) {
+                    const previousFiber = fiber.alternate // 当前节点的备用节点（React双缓存机制）
+                    if (previousFiber !== null) {
+                        let detachedChild = previousFiber.child // 备用节点的字节点
+                        if (detachedChild !== null) {
+                            previousFiber.child = null  // 断开父节点与字节点的引用
+                            // 循环断开所有子节点的兄弟引用
+                            do {
+                                const detachedSibling = detachedChild.sibling
+                                detachedChild.sibling = null
+                                detachedChild = detachedSibling
+                            } while (detachedChild !== null)
+                        }
+                    }
+                }
+
+                nextEffect = fiber // 处理完删除后，指针回到当前节点
+            }
+        }
+
+        // 2. 决定下一步遍历方向： 是否进入子树
+        // 如果当前节点的子树有 Passive 副作用（subtreeFlags 包含 PassiveMask），且存在子节点
+        if ((fiber.subtreeFlags & PassiveMask) !== NoFlags && child !== null) {
+            child.return = fiber // 确保子节点的父引用正确（防止遍历错乱）
+            nextEffect = child // 指针向下移动到子节点（继续深度优先遍历）
+        } else {
+            // 子树无 Passive 副作用，或无子女，进入“向上回溯阶段”
+            commitPassiveUnmountEffects_complete()
+        }
+    }
+}
+
+function safelyCallDestroy(
+    current: Fiber,
+    nearestMountedAncestor: Fiber | null,
+    destroy: () => void
+) {
+    debugger
+}
+
+function commitHookEffectListUnmount(
+    flags: HookFlags,
+    finishedWork: Fiber,
+    nearestMountedAncestor: Fiber | null
+) {
+    const updateQueue: FunctionComponentUpdateQueue | null = finishedWork.updateQueue as any
+    const lastEffect = updateQueue !== null ? updateQueue.lastEffect : null
+    if (lastEffect !== null) {
+        const firstEffect = lastEffect.next
+        let effect = firstEffect
+        do {
+            if ((effect.tag & flags) === flags) {
+                // Unmount
+                const destroy = effect.destroy
+                effect.destroy = undefined
+                if (destroy !== undefined) {
+                    safelyCallDestroy(finishedWork, nearestMountedAncestor, destroy)
+                }
+            }
+            effect = effect.next
+        } while (effect !== firstEffect);
+    }
+}
+
+function commitHookEffectListMount(
+    flags: HookFlags,
+    finishedWork: Fiber,
+) {
+    const updateQueue: FunctionComponentUpdateQueue | null = finishedWork.updateQueue as any
+    const lastEffect = updateQueue !== null ? updateQueue.lastEffect : null
+    if (lastEffect !== null) {
+        const firstEffect = lastEffect.next
+        let effect = lastEffect.next
+        do {
+            if ((effect.tag & flags) === flags) {
+                const create = effect.create
+                effect.destroy = create()
+            }
+            effect = effect.next
+        } while (effect !== firstEffect);
+    }
+}
+
+function commitPassiveMountOnFiber(
+    finishedRoot: FiberRoot,
+    finishedWork: Fiber,
+    committedLanes: Lanes,
+    committedTransitions: Array<Transition> | null,
+) {
+    switch (finishedWork.tag) {
+        case FunctionComponent:
+        case ForwardRef:
+        case SimpleMemoComponent: {
+            commitHookEffectListMount(HookPassive | HookHasEffect, finishedWork)
+            break
+        }
+        case HostRoot: {
+            if (enableCache) {
+                debugger
+            }
+            if (enableTransitionTracing) {
+                debugger
+            }
+            break
+        }
+        case LegacyHiddenComponent:
+        case OffscreenComponent: {
+            if (enableCache) {
+                debugger
+            }
+            if (enableTransitionTracing) {
+                debugger
+            }
+            break
+        }
+        case CacheComponent: {
+            if (enableCache) {
+                debugger
+            }
+            break
+        }
+    }
+}
+
+function commitPassiveUnmountOnFiber(finishedWork: Fiber) {
+    switch (finishedWork.tag) {
+        case FunctionComponent:
+        case ForwardRef:
+        case SimpleMemoComponent: {
+            if (enableProfilerTimer && enableProfilerCommitHooks && finishedWork.mode & ProfileMode) {
+                // startPassiveEffectTimer();
+                commitHookEffectListUnmount(
+                    HookPassive | HookHasEffect,
+                    finishedWork,
+                    finishedWork.return,
+                );
+                // recordPassiveEffectDuration(finishedWork);
+            } else {
+                commitHookEffectListUnmount(
+                    HookPassive | HookHasEffect,
+                    finishedWork,
+                    finishedWork.return,
+                );
+            }
+        }
+    }
+}
+
+function commitPassiveUnmountEffects_complete() {
+    // 循环遍历：只要还有需要处理的 Fiber 节点（nextEffect 不为 null）
+    while (nextEffect !== null) {
+        const fiber = nextEffect // 当前正在处理的 Fiber 节点
+
+        // 1. 执行当前节点的被动卸载副作用
+        if ((fiber.flags & Passive) !== NoFlags) {
+            commitPassiveUnmountOnFiber(fiber) // 核心：执行卸载清理逻辑（如 useEffect 的清理函数）
+        }
+
+        // 2. 决定下一步遍历方向：是否处理兄弟节点
+        const sibling = fiber.sibling // 当前节点的兄弟节点
+        if (sibling !== null) {
+            sibling.return = fiber.return // 确保兄弟节点的父引用正确
+            nextEffect = sibling // 指针移动到兄弟节点（处理同层级节点）
+            return // 退出当前循环，回到 begin 函数继续处理兄弟节点
+        }
+
+        // 3. 无兄弟节点，向上回溯到父节点
+        nextEffect = fiber.return // 指针向上移动到父节点（继续向上回溯）
+    }
+
+}
+
+export function commitPassiveUnmountEffects(firstChild: Fiber) {
+    nextEffect = firstChild
+    commitPassiveUnmountEffects_begin()
+}
+
+
+export function commitPassiveMountEffects(
+    root: FiberRoot,
+    finishedWork: Fiber,
+    committedLanes: Lanes,
+    committedTransitions: Array<Transition> | null
+) {
+    nextEffect = finishedWork
+    commitPassiveMountEffects_begin(
+        finishedWork,
+        root,
+        committedLanes,
+        committedTransitions,
+    )
+}
+
+// 向下遍历 Fiber 树，找到所有包含 Passive Effect 的子树，为后续执行副作用做准备。
+function commitPassiveMountEffects_begin(
+    subtreeRoot: Fiber, // 要处理的子树根节点
+    root: FiberRoot, // React 应用的根节点（FiberRoot）
+    committedLanes: Lanes, // 本次提交的优先级车道
+    committedTransitions: Array<Transition> | null // 本次提交的过渡任务
+) {
+    // 循环遍历：只要还有待处理的 Fiber 节点（nextEffect 不为 null）
+    while (nextEffect !== null) {
+        const fiber = nextEffect // 当前处理的 Fiber 节点
+        const firstChild = fiber.child // 当前节点的第一个子 Fiber 节点
+        // 关键判断：当前节点的子树包含 Passive Effect，且存在子节点
+        if ((fiber.subtreeFlags & PassiveMask) !== NoFlags && firstChild !== null) {
+            firstChild.return = fiber // 确保子节点的父引用正确（避免遍历错乱）
+            nextEffect = firstChild  // 指针下移：处理子节点（深度优先）
+        } else {
+            // 子树无 Passive Effect 或无子节点 → 进入「回溯执行阶段」
+            commitPassiveMountEffects_complete(
+                subtreeRoot,
+                root,
+                committedLanes,
+                committedTransitions,
+            )
+        }
+    }
+}
+
+// 向上回溯 Fiber 树，执行当前节点的 Passive Effect 挂载逻辑（即执行 useEffect 的 create 函数），并处理兄弟节点 / 父节点的遍历
+function commitPassiveMountEffects_complete(
+    subtreeRoot: Fiber,
+    root: FiberRoot,
+    committedLanes: Lanes,
+    committedTransitions: Array<Transition> | null
+) {
+    while (nextEffect !== null) {
+        const fiber = nextEffect // 当前处理的 Fiber 节点
+        
+        // 关键：当前节点有 Passive 标记 → 执行 useEffect 的挂载逻辑
+        if ((fiber.flags & Passive) !== NoFlags) {
+            try {
+                // 核心：执行 Passive Effect 挂载（调用 useEffect 的 create 函数）
+                commitPassiveMountOnFiber(
+                    root,
+                    fiber,
+                    committedLanes,
+                    committedTransitions
+                )
+            } catch (error) {
+                // 捕获执行过程中的错误，记录到 Fiber 节点
+                captureCommitPhaseError(fiber, fiber.return, error)
+            }
+        }
+
+        // 终止条件：遍历到子树根节点 → 结束遍历
+        if (fiber === subtreeRoot) {
+            nextEffect = null
+            return
+        }
+
+        // 步骤1：优先处理兄弟节点（同层级）
+        const sibling = fiber.sibling
+        if (sibling !== null) {
+            sibling.return = fiber.return // 修复兄弟节点的父引用
+            nextEffect = sibling // 指针移到兄弟节点
+            return // 退出当前循环，回到 begin 函数继续处理兄弟节点
+        }
+
+        // 步骤2：无兄弟节点 → 回溯到父节点
+        nextEffect = fiber.return
     }
 }

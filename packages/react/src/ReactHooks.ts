@@ -21,6 +21,6 @@ export function useEffect(
     create: () => (() => void) | void,
     deps: Array<unknown> | void | null
 ): void {
-    console.log('-----useEffect-------', create, deps)
-    debugger
+    const dispatcher = resolveDispatcher()
+    return dispatcher.useEffect(create, deps)
 }
