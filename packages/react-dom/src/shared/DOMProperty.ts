@@ -1,4 +1,5 @@
-import { enableCustomElementPropertySupport } from "shared/ReactFeatureFlags";
+import hasOwnProperty from "shared/hasOwnProperty";
+import { enableCustomElementPropertySupport, enableFilterEmptyStringAttributesDOM } from "shared/ReactFeatureFlags";
 
 // 属性类型
 type PropertyType = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -73,14 +74,14 @@ function PropertyInfoRecord(
 const properties = {}
 
 const reservedProps = [
-  'children',
-  'dangerouslySetInnerHTML',
-  'defaultValue',
-  'defaultChecked',
-  'innerHTML',
-  'suppressContentEditableWarning',
-  'suppressHydrationWarning',
-  'style',
+    'children',
+    'dangerouslySetInnerHTML',
+    'defaultValue',
+    'defaultChecked',
+    'innerHTML',
+    'suppressContentEditableWarning',
+    'suppressHydrationWarning',
+    'style',
 ]
 
 enableCustomElementPropertySupport && reservedProps.push('innerText', 'textContent')
@@ -90,10 +91,10 @@ reservedProps.forEach(name => {
 })
 
 const specialWordProps = [
-  ['acceptCharset', 'accept-charset'],
-  ['className', 'class'],
-  ['htmlFor', 'for'],
-  ['httpEquiv', 'http-equiv'],
+    ['acceptCharset', 'accept-charset'],
+    ['className', 'class'],
+    ['htmlFor', 'for'],
+    ['httpEquiv', 'http-equiv'],
 ]
 specialWordProps.forEach(([name, attributeName]) => {
     properties[name] = new PropertyInfoRecord(name, STRING, false, attributeName, null, false, false)
@@ -102,13 +103,13 @@ specialWordProps.forEach(([name, attributeName]) => {
 const booleanProps = ['contentEditable', 'draggable', 'spellCheck', 'value']
 booleanProps.forEach(name => {
     properties[name] = new PropertyInfoRecord(
-      name,
-      BOOLEANISH_STRING,
-      false, // mustUseProperty
-      name.toLowerCase(), // attributeName
-      null, // attributeNamespace
-      false, // sanitizeURL
-      false, // removeEmptyString
+        name,
+        BOOLEANISH_STRING,
+        false, // mustUseProperty
+        name.toLowerCase(), // attributeName
+        null, // attributeNamespace
+        false, // sanitizeURL
+        false, // removeEmptyString
     );
 });
 
@@ -153,36 +154,36 @@ htmlProps.forEach(name => {
 })
 
 const domProps = [
-  'checked',
-  'multiple',
-  'muted',
-  'selected',
+    'checked',
+    'multiple',
+    'muted',
+    'selected',
 ]
 domProps.forEach(name => {
     properties[name] = new PropertyInfoRecord(name, BOOLEAN, true, name, null, false, false)
 })
 
 const overloadedProps = [
-  'capture',
-  'download',
+    'capture',
+    'download',
 ]
 overloadedProps.forEach(name => {
     properties[name] = new PropertyInfoRecord(name, OVERLOADED_BOOLEAN, false, name, null, false, false)
 })
 
 const htmlPositiveprops = [
-  'cols',
-  'rows',
-  'size',
-  'span', 
+    'cols',
+    'rows',
+    'size',
+    'span',
 ]
 htmlPositiveprops.forEach(name => {
     properties[name] = new PropertyInfoRecord(name, POSITIVE_NUMERIC, false, name, null, false, false)
 })
 
 const htmlOtherProps = [
-   'rowSpan', 
-   'start'
+    'rowSpan',
+    'start'
 ]
 htmlOtherProps.forEach(name => {
     properties[name] = new PropertyInfoRecord(name, NUMERIC, false, name.toLowerCase(), null, false, false)
@@ -271,12 +272,12 @@ camelizeProps.forEach(attributeName => {
 })
 
 const xlinkProps = [
-  'xlink:actuate',
-  'xlink:arcrole',
-  'xlink:role',
-  'xlink:show',
-  'xlink:title',
-  'xlink:type',
+    'xlink:actuate',
+    'xlink:arcrole',
+    'xlink:role',
+    'xlink:show',
+    'xlink:title',
+    'xlink:type',
 ]
 xlinkProps.forEach(attributeName => {
     const name = attributeName.replace(CAMELIZE, capitalize)
@@ -284,9 +285,9 @@ xlinkProps.forEach(attributeName => {
 })
 
 const xmlProps = [
-  'xml:base',
-  'xml:lang',
-  'xml:space',
+    'xml:base',
+    'xml:lang',
+    'xml:space',
 ]
 xmlProps.forEach(attributeName => {
     const name = attributeName.replace(CAMELIZE, capitalize)
@@ -294,7 +295,7 @@ xmlProps.forEach(attributeName => {
 })
 
 const htmlSvgProps = [
-    'tabIndex', 
+    'tabIndex',
     'crossOrigin'
 ]
 htmlSvgProps.forEach(attributeName => {
@@ -315,13 +316,20 @@ export function getPropertyInfo(name: string): PropertyInfo | null {
 }
 
 export function isAttributeNameSafe(attributeName: string) {
-    debugger
+    if (hasOwnProperty.call(validatedAttributeNameCache, attributeName)) return true
+    if (hasOwnProperty.call(illegalAttributeNameCache, attributeName)) return false
+    if (VALID_ATTRIBUTE_NAME_REGEX.test(attributeName)) {
+        validatedAttributeNameCache[attributeName] = true
+        return true
+    }
+    illegalAttributeNameCache[attributeName] = true
+    return false
 }
 
 // shouldIgnoreAttribute 是 React 中用于判断某个属性是否应该被忽略（不应用到 DOM 元素上） 的核心函数。它根据属性的元信息、元素类型（是否为自定义组件）和属性名特征，决定该属性是否需要跳过处理，确保只有符合规则的属性才会被应用到真实 DOM 上。
 export function shouldIgnoreAttribute(name: string, propertyInfo: PropertyInfo | null, isCustomComponentTag: boolean) {
     // RESERVED 类型的属性（如 children、ref、dangerouslySetInnerHTML）由 React 内部单独处理，不应该直接映射到 DOM 特性或属性
-    if(propertyInfo !== null) {
+    if (propertyInfo !== null) {
         return propertyInfo.type === RESERVED
     }
     // 自定义组件（如 Web Components）的属性处理逻辑由组件自身定义，React 不应擅自忽略，需全部传递给组件实例。例如，自定义组件 <my-component> 可能依赖 customProp 等属性，React 需确保这些属性被正常应用。
@@ -330,7 +338,7 @@ export function shouldIgnoreAttribute(name: string, propertyInfo: PropertyInfo |
     }
     // 过滤以 on 开头的非自定义组件属性
     if (
-        name.length > 2 && 
+        name.length > 2 &&
         (name[0] === 'o' || name[0] === 'O') &&
         (name[1] === 'n' || name[1] === 'N')
     ) {
@@ -340,10 +348,50 @@ export function shouldIgnoreAttribute(name: string, propertyInfo: PropertyInfo |
 }
 
 export function shouldRemoveAttributeWithWarning(name: string, value: any, propertyInfo: PropertyInfo | null, isCustomComponentTag: boolean) {
-    debugger
+    if (propertyInfo !== null && propertyInfo.type === RESERVED) return false
+    switch (typeof value) {
+        case 'function':
+        case 'symbol':
+            return true
+        case 'boolean': {
+            if (isCustomComponentTag) return false
+            if (propertyInfo !== null) {
+                return !propertyInfo.acceptsBooleans
+            } else {
+                const prefix = name.toLowerCase().slice(0, 5)
+                return prefix !== 'data-' && prefix !== 'aria-'
+            }
+        }
+        default:
+            return false
+    }
 }
 
 export function shouldRemoveAttribute(name: string, value: any, propertyInfo: PropertyInfo | null, isCustomComponentTag: boolean): boolean {
-    debugger
-    
+    if (value === null || typeof value === 'undefined') return true
+    if (shouldRemoveAttributeWithWarning(name, value, propertyInfo, isCustomComponentTag)) return true
+    if (isCustomComponentTag) {
+        if (enableCustomElementPropertySupport) {
+            if (value === false) return true
+        }
+        return false
+    }
+    if (propertyInfo !== null) {
+        if (enableFilterEmptyStringAttributesDOM) {
+            if (propertyInfo.removeEmptyString && value === '') return true
+        }
+
+        switch (propertyInfo.type) {
+            case BOOLEAN:
+                return !value
+            case OVERLOADED_BOOLEAN:
+                return value === false
+            case NUMERIC:
+                return isNaN(value)
+            case POSITIVE_NUMERIC:
+                return isNaN(value) || value < 1
+        }
+    }
+
+    return false
 }

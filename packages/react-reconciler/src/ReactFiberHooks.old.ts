@@ -1,15 +1,17 @@
-import { enableLazyContextPropagation, enableNewReconciler } from "shared/ReactFeatureFlags"
-import { isSubsetOfLanes, isTransitionLane, Lane, Lanes, mergeLanes, NoLane, NoLanes, removeLanes } from "./ReactFiberLane.old"
+import { enableLazyContextPropagation, enableNewReconciler, enableSuspenseLayoutEffectSemantics, enableTransitionTracing } from "shared/ReactFeatureFlags"
+import { intersectLanes, isSubsetOfLanes, isTransitionLane, Lane, Lanes, markRootEntangled, mergeLanes, NoLane, NoLanes, removeLanes } from "./ReactFiberLane.old"
 import { readContext } from "./ReactFiberNewContext.old"
 import { Dispatcher, Fiber, FiberRoot } from "./ReactInternalTypes"
 import ReactSharedInternals from "shared/ReactSharedInternals"
-import { 
-    type HookFlags, 
+import {
+    type HookFlags,
     HasEffect as HookHasEffect,
-    Passive as HookPassive 
+    Passive as HookPassive,
+    Layout as HookLayout,
+    Insertion as HookInsertion,
 } from "./ReactHookEffectTags"
-import { MutableSource, MutableSourceGetSnapshotFn, MutableSourceSubscribeFn } from "shared/ReactTypes"
-import { markSkippedUpdateLanes, requestEventTime, requestUpdateLane, scheduleUpdateOnFiber } from "./ReactFiberWorkLoop.old"
+import { MutableSource, MutableSourceGetSnapshotFn, MutableSourceSubscribeFn, StartTransitionOptions } from "shared/ReactTypes"
+import { getWorkInProgressRoot, markSkippedUpdateLanes, requestEventTime, requestUpdateLane, scheduleUpdateOnFiber } from "./ReactFiberWorkLoop.old"
 import { enqueueConcurrentHookUpdate, enqueueConcurrentHookUpdateAndEagerlyBailout } from "./ReactFiberConcurrentUpdates.old"
 import is from 'shared/objectIs'
 import {
@@ -21,12 +23,17 @@ import {
     StaticMask as StaticMaskEffect,
     Update as UpdateEffect,
     StoreConsistency,
+    Flags,
 } from './ReactFiberFlags';
 import { markWorkInProgressReceivedUpdate } from "./ReactFiberBeginWork.old"
+import { getIsHydrating } from "./ReactFiberHydrationContext.old"
+import { getTreeId } from "./ReactFiberTreeContext.old"
+import { ContinuousEventPriority, getCurrentUpdatePriority, higherEventPriority, setCurrentUpdatePriority } from "./ReactEventPriorities"
+import { now } from "./Scheduler"
 
-const ReactCurrentDispatcher = ReactSharedInternals.ReactCurrentDispatcher
+const { ReactCurrentDispatcher, ReactCurrentBatchConfig } = ReactSharedInternals
 
-type BasicStateAction<S> = ((s:S) => S) & S
+type BasicStateAction<S> = ((s: S) => S) & S
 type Dispatch<A> = (a: A) => void
 
 export type Update<S, A> = {
@@ -74,6 +81,7 @@ export type FunctionComponentUpdateQueue = {
 
 // 局部计数器，用于追踪 `useId` 钩子的调用次数
 let localIdCounter: number = 0;
+let globalClientIdCounter: number = 0;
 let renderLanes: Lanes = NoLanes;
 let currentlyRenderingFiber: Fiber = null as any;
 let didScheduleRenderPhaseUpdateDuringThisPass: boolean = false
@@ -97,6 +105,31 @@ function areHookInputsEqual(
         return false
     }
     return true
+}
+
+function dispatchReducerAction<S, A>(
+    fiber: Fiber,
+    queue: UpdateQueue<S, A>,
+    action: A
+) {
+    const lane = requestUpdateLane(fiber)
+    const update: Update<S, A> = {
+        lane,
+        action,
+        hasEagerState: false,
+        eagerState: null,
+        next: null as any
+    }
+    if (isRenderPhaseUpdate(fiber)) {
+        enqueueRenderPhaseUpdate(queue, update)
+    } else {
+        const root: any = enqueueConcurrentHookUpdate(fiber, queue, update, lane)
+        if (root !== null) {
+            const eventTime = requestEventTime()
+            scheduleUpdateOnFiber(root, fiber, lane, eventTime)
+            entangleTransitionUpdate(root, queue, lane);
+        }
+    }
 }
 
 function basicStateReducer<S>(state: S, action: BasicStateAction<S>): S {
@@ -142,13 +175,30 @@ function pushEffect(tag, create, destroy, deps) {
     return effect
 }
 
+/**
+ * entangleTransitionUpdate 是 React 处理过渡更新（useTransition）车道纠缠 的核心函数 —— 它的作用是：
+ * 1.当更新关联的车道是过渡车道时，将该车道与更新队列（UpdateQueue）已有的车道「纠缠」（合并），并同步更新根节点的纠缠状态，保证同一更新队列的所有过渡更新共享相同的车道集合，且仅保留根节点仍待处理的车道。简单说，这个函数是「让同一队列的过渡更新绑定在一起」，确保它们能被统一调度、统一挂起 / 恢复，避免单个过渡更新孤立执行
+*/
 function entangleTransitionUpdate<S, A>(
     root: FiberRoot,
     queue: UpdateQueue<S, A>,
     lane: Lane
 ) {
+    // 步骤1：仅处理过渡车道（非过渡更新直接跳过）
     if (isTransitionLane(lane)) {
-        debugger
+        // 步骤2：获取更新队列当前关联的所有车道
+        let queueLanes = queue.lanes
+        // 步骤3：清理已完成的车道（仅保留根节点仍待处理的车道）
+        // 核心逻辑：队列车道 ∩ 根节点待处理车道 = 仍有效（未完成）的车道
+        queueLanes = intersectLanes(queueLanes, root.pendingLanes)
+        // 步骤4：纠缠新过渡车道 → 合并已有有效车道 + 新车道
+        const newQueueLanes = mergeLanes(queueLanes, lane)
+        // 更新队列的车道集合为纠缠后的结果
+        queue.lanes = newQueueLanes
+
+        // 步骤5：标记根节点的纠缠状态（确保调度器统一处理这些车道）
+        // 即使车道已存在，仍需重新标记（避免遗漏已完成的状态）
+        markRootEntangled(root, newQueueLanes)
     }
 }
 
@@ -169,7 +219,7 @@ function dispatchSetState<S, A>(
     }
 
     // 判断当前是否处于渲染阶段（如在 render 函数中调用 setState）
-    if(isRenderPhaseUpdate(fiber)) {
+    if (isRenderPhaseUpdate(fiber)) {
         // 将更新加入渲染阶段的更新队列
         enqueueRenderPhaseUpdate(queue, update)
     } else {  // 检查当前 Fiber 及其备用节点是否没有等待处理的更新
@@ -177,7 +227,7 @@ function dispatchSetState<S, A>(
         // 队列当前为空，可以在进入渲染阶段前提前计算下一个状态，如果新状态与当前状态相同，可能可以完全跳过更新
         if (fiber.lanes === NoLanes && (alternate === null || alternate.lanes === NoLanes)) {
             const lastRenderedReducer = queue.lastRenderedReducer
-            if(lastRenderedReducer !== null) {
+            if (lastRenderedReducer !== null) {
                 let prevDispatcher
                 try {
                     // 获取当前渲染的状态
@@ -247,11 +297,14 @@ function mountWorkInProgressHook(): Hook {
 }
 
 function mountCallback<T>(callback: T, deps: Array<any> | void | null): T {
-    debugger
+    const hook = mountWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    hook.memoizedState = [callback, nextDeps]
+    return callback
 }
 
 function mountEffectImpl(
-    fiberFlags, 
+    fiberFlags,
     hookFlags: HookFlags,
     create: () => (() => void) | void,
     deps: Array<any> | void | null
@@ -281,14 +334,24 @@ function mountImperativeHandle<T>(
     create: () => T,
     deps: Array<any> | void | null
 ) {
-    debugger
+    const effectDeps = deps !== null && deps !== undefined ? deps.concat([ref]) : null
+    let fiberFlags: Flags = UpdateEffect
+    if (enableSuspenseLayoutEffectSemantics) {
+        fiberFlags |= LayoutStaticEffect
+    }
+
+    return mountEffectImpl(fiberFlags, HookLayout, imperativeHandleEffect.bind(null, create, ref as any), effectDeps)
 }
 
 function mountLayoutEffect(
     create: () => (() => void) | void,
     deps: Array<any> | void | null
 ): void {
-    debugger
+    let fiberFlags: Flags = UpdateEffect;
+    if (enableSuspenseLayoutEffectSemantics) {
+        fiberFlags |= LayoutStaticEffect;
+    }
+    return mountEffectImpl(fiberFlags, HookLayout, create, deps)
 }
 
 function mountInsertionEffect(
@@ -302,7 +365,11 @@ function mountMemo<T>(
     nextCreate: () => T,
     deps: Array<any> | void | null
 ): T {
-    debugger
+    const hook = mountWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    const nextValue = nextCreate()
+    hook.memoizedState = [nextValue, nextDeps]
+    return nextValue
 }
 
 function mountReducer<S, I, A>(
@@ -310,11 +377,30 @@ function mountReducer<S, I, A>(
     initialArg: I,
     init?: (i: I) => S
 ): [S, Dispatch<A>] {
-    debugger
+    const hook = mountWorkInProgressHook()
+    let initialState = init !== undefined ? init(initialArg) : initialArg
+    hook.memoizedState = hook.baseState = initialState
+
+    const queue: UpdateQueue<S, A> = {
+        pending: null,
+        interleaved: null,
+        lanes: NoLanes,
+        dispatch: null,
+        lastRenderedReducer: reducer,
+        lastRenderedState: initialState as any
+    }
+
+    hook.queue = queue
+    const dispatch: Dispatch<BasicStateAction<S>> = (queue.dispatch = (dispatchReducerAction.bind(null, currentlyRenderingFiber, queue as any)))
+
+    return [hook.memoizedState, dispatch as Dispatch<A>]
 }
 
 function mountRef<T>(initialValue: T): { current: T } {
-    debugger
+    const hook = mountWorkInProgressHook()
+    const ref = { current: initialValue }
+    hook.memoizedState = ref
+    return ref
 }
 
 function mountState<S>(
@@ -342,11 +428,6 @@ function mountState<S>(
 function mountDeferredValue<T>(value: T): T {
     debugger
     return value
-}
-
-function mountTransition(): [boolean, (callback: () => void, options?: StartTransitionOptions) => void] {
-    debugger
-    
 }
 
 function mountMutableSource<Source, Snapshot>(
@@ -444,11 +525,41 @@ function mountSyncExternalStore<T>(
 }
 
 function mountId(): string {
-    debugger
+    const hook = mountWorkInProgressHook()
+    const root: FiberRoot | null = getWorkInProgressRoot()
+
+    const identifierPrefix = root?.identifierPrefix
+    let id
+    if (getIsHydrating()) {
+        const treeId = getTreeId()
+        id = ':' + identifierPrefix + 'R' + treeId
+        const localId = localIdCounter++
+        if (localId > 0) {
+            id += 'H' + localId.toString(32)
+        }
+        id += ':'
+    } else {
+        const globalClientId = globalClientIdCounter++
+        id = ':' + identifierPrefix + 'r' + globalClientId.toString(32) + ':'
+    }
+    hook.memoizedState = id
+    return id
 }
 
 function updateCallback<T>(callback: T, deps: Array<any> | void | null): T {
-    debugger
+    const hook = updateWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    const prevState = hook.memoizedState
+    if (prevState !== null) {
+        if (nextDeps !== null) {
+            const prevDeps: Array<any> | null = prevState[1]
+            if (areHookInputsEqual(nextDeps, prevDeps)) {
+                return prevState[0]
+            }
+        }
+    }
+    hook.memoizedState = [callback, nextDeps]
+    return callback
 }
 
 function updateEffect(
@@ -463,7 +574,8 @@ function updateImperativeHandle<T>(
     create: () => T,
     deps: Array<any> | void | null
 ): void {
-    debugger
+    const effectDeps = deps !== null && deps !== undefined ? deps.concat([ref]) : null
+    return updateEffectImpl(UpdateEffect, HookLayout, imperativeHandleEffect.bind(null, create, ref as any), effectDeps)
 }
 
 function updateInsertionEffect(
@@ -477,14 +589,27 @@ function updateLayoutEffect(
     create: () => (() => void) | void,
     deps: Array<any> | void | null
 ): void {
-    debugger
+    return updateEffectImpl(UpdateEffect, HookLayout, create, deps)
 }
 
 function updateMemo<T>(
     nextCreate: () => T,
     deps: Array<any> | void | null
 ): T {
-    debugger
+    const hook = updateWorkInProgressHook()
+    const nextDeps = deps === undefined ? null : deps
+    const prevState = hook.memoizedState
+    if (prevState !== null) {
+        if (nextDeps !== null) {
+            const prevDeps: Array<any> | null = prevState[1]
+            if (areHookInputsEqual(nextDeps, prevDeps)) {
+                return prevState[0]
+            }
+        }
+    }
+    const nextValue = nextCreate()
+    hook.memoizedState = [nextValue, nextDeps]
+    return nextValue
 }
 
 function updateReducer<S, I, A>(
@@ -578,7 +703,7 @@ function updateReducer<S, I, A>(
             }
             // 处理下一个更新
             update = update.next
-        } while(update !== null && update !== first) // 循环结束条件
+        } while (update !== null && update !== first) // 循环结束条件
 
         // 处理新的基础队列
         if (newBaseQueueLast === null) {
@@ -616,12 +741,13 @@ function updateReducer<S, I, A>(
 }
 
 function updateRef<T>(initialValue: T): { current: T } {
-    debugger
+    const hook = updateWorkInProgressHook()
+    return hook.memoizedState
 }
 
 function updateState<S>(
     initialState: (() => S) | S,
-): [S, Dispatch<BasicStateAction<S>>]{
+): [S, Dispatch<BasicStateAction<S>>] {
     return updateReducer(basicStateReducer, initialState)
 }
 
@@ -629,9 +755,21 @@ function updateDeferredValue<T>(value: T): T {
     debugger
 }
 
+
+function mountTransition(): [boolean, (callback: () => void, options?: StartTransitionOptions) => void] {
+    const [isPending, setPending] = mountState(false)
+    const start = startTransition.bind(null, setPending)
+    const hook = mountWorkInProgressHook()
+    hook.memoizedState = start
+    return [isPending, start]
+}
+
+
 function updateTransition(): [boolean, (callback: () => void, options?: StartTransitionOptions) => void] {
-    debugger
-    
+    const [isPending] = updateState(false)
+    const hook = updateWorkInProgressHook()
+    const start = hook.memoizedState
+    return [isPending, start]
 }
 
 function updateMutableSource<Source, Snapshot>(
@@ -656,7 +794,9 @@ function updateSyncExternalStore<T>(
 }
 
 function updateId(): string {
-    debugger
+    const hook = updateWorkInProgressHook()
+    const id: string = hook.memoizedState
+    return id
 }
 
 export function bailoutHooks(
@@ -670,7 +810,7 @@ export function bailoutHooks(
 }
 
 
-function mountDebugValue<T>(value: T, formatterFn?: (value: T) => any): void {}
+function mountDebugValue<T>(value: T, formatterFn?: (value: T) => any): void { }
 const updateDebugValue = mountDebugValue
 
 /**
@@ -695,7 +835,7 @@ export function renderWithHooks<Props, SecondArg>(
     // 根据组件是否首次渲染，选择不同的 hooks 调度器， 首次渲染（current 不存在或无记化状态）使用挂载阶段的调度器，更新阶段使用更新阶段的调度器
     ReactCurrentDispatcher.current = (current === null || current.memoizedState === null) ? HooksDispatcherOnMount : HooksDispatcherOnUpdate
     let children = Component(props, secondArg)
-    
+
     // 处理渲染阶段可能发生的更新（如在 render中调用 setState）
     if (didScheduleRenderPhaseUpdateDuringThisPass) {
         debugger
@@ -724,7 +864,7 @@ export function renderWithHooks<Props, SecondArg>(
     if (enableLazyContextPropagation) {
         debugger
     }
-    
+
     // 返回组件渲染产生的子节点
     return children
 }
@@ -751,6 +891,39 @@ export const ContextOnlyDispatcher: Dispatcher = {
     unstable_isNewReconciler: enableNewReconciler,
 }
 
+/**
+ * 渲染阶段 Hook 执行抛出异常后，重置所有 Hook 相关状态的核心函数
+ * 作用：清理异常导致的临时状态、重置调度标记，恢复 React 内部状态到安全初始值
+*/
+export function resetHooksAfterThrow() {
+    // 1. 重置当前 Dispatcher 为「仅上下文 Dispatcher」
+    // ContextOnlyDispatcher：只能访问 useContext，其他 Hook 调用会抛错（避免异常后误用 Hook）
+    ReactCurrentDispatcher.current = ContextOnlyDispatcher
+    // 2. 清理渲染阶段的更新队列（解决异常导致的更新残留）
+    if (didScheduleRenderPhaseUpdate) {
+        // 遍历当前渲染 Fiber 的所有 Hook 链表
+        let hook: Hook | null = currentlyRenderingFiber.memoizedState
+        while (hook !== null) {
+            const queue = hook.queue // 获取 Hook 的更新队列（如 useState 的 setState 队列）
+            if (queue !== null) {
+                queue.pending = null // 清空待处理的更新（避免异常后重复执行更新）
+            }
+            hook = hook.next
+        }
+        didScheduleRenderPhaseUpdate = false // 重置「渲染阶段更新」标记
+    }
+
+    // 3. 重置核心渲染状态（恢复到初始值，避免异常状态污染后续渲染）
+    renderLanes = NoLanes // 清空渲染车道（优先级），重置为「无车道」
+    currentlyRenderingFiber = null as any // 清空「当前正在渲染的 Fiber」引用
+    currentHook = null // 清空「当前正在处理的旧 Hook」指针
+    workInProgressHook = null // 清空「当前正在处理的新 Hook」指针
+
+    // 4. 重置辅助标记（保证渲染流程的原子性）
+    didScheduleRenderPhaseUpdateDuringThisPass = false  // 重置「本次遍历的渲染阶段更新」标记
+    localIdCounter = 0 // 重置 Hook 本地 ID 计数器（用于 Hook 唯一性校验）
+}
+
 const HooksDispatcherOnMount: Dispatcher = {
     readContext,
     useCallback: mountCallback,
@@ -769,13 +942,13 @@ const HooksDispatcherOnMount: Dispatcher = {
     useMutableSource: mountMutableSource,
     useSyncExternalStore: mountSyncExternalStore,
     useId: mountId,
-  
+
     unstable_isNewReconciler: enableNewReconciler,
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
     readContext,
-  
+
     useCallback: updateCallback,
     useContext: readContext,
     useEffect: updateEffect,
@@ -792,10 +965,55 @@ const HooksDispatcherOnUpdate: Dispatcher = {
     useMutableSource: updateMutableSource,
     useSyncExternalStore: updateSyncExternalStore,
     useId: updateId,
-  
+
     unstable_isNewReconciler: enableNewReconciler,
 };
 
 function throwInvalidHookError(): any {
     throw new Error('throwInvalidHookError 发生错误')
+}
+
+function startTransition(setPending, callback, options) {
+    const previousPriority = getCurrentUpdatePriority()
+    setCurrentUpdatePriority(higherEventPriority(previousPriority, ContinuousEventPriority))
+    setPending(true)
+
+    const prevTransition = ReactCurrentBatchConfig.transition
+    ReactCurrentBatchConfig.transition = {}
+    const currentTransition = ReactCurrentBatchConfig.transition
+    if (enableTransitionTracing) {
+        if (options !== undefined && options.name !== undefined) {
+            ReactCurrentBatchConfig.transition.name = options.name
+            ReactCurrentBatchConfig.transition.startTime = now()
+        }
+    }
+
+    try {
+        setPending(false)
+        callback()
+    } finally {
+        setCurrentUpdatePriority(previousPriority)
+        ReactCurrentBatchConfig.transition = prevTransition
+    }
+}
+
+function imperativeHandleEffect<T>(
+    create: () => T,
+    ref: { current: T | null } | ((inst: T | null) => any) | null | void
+) {
+    if (typeof ref === 'function') {
+        const refCallback = ref
+        const inst = create()
+        refCallback(inst)
+        return () => {
+            refCallback(null)
+        }
+    } else if (ref !== null && ref !== undefined) {
+        const refObject = ref
+        const inst = create()
+        refObject.current = inst
+        return () => {
+            refObject.current = null
+        }
+    }
 }

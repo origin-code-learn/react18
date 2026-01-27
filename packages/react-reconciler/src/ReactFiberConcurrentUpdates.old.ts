@@ -26,6 +26,10 @@ export function pushConcurrentUpdateQueue(
     }
 }
 
+export function enqueueConcurrentRenderForLane(fiber: Fiber, lane: Lane) {
+    return markUpdateLaneFromFiberToRoot(fiber, lane)
+}
+
 /**
  * 从源 Fiber 节点向上遍历到根节点，标记所有祖先节点的 “更新车道”，确保：
  * 1. 每个节点都记录自身或子树中存在的更新优先级；
@@ -35,7 +39,7 @@ export function pushConcurrentUpdateQueue(
  *  1. 让每个祖先节点都 “知道” 子树中存在该优先级的更新；
  *  2. 根节点（HostRoot）最终会感知到整个树的更新，从而触发 scheduleUpdateOnFiber 进行调度；
  *  3. 后续协调阶段，父节点可通过 childLanes 快速判断是否需要深入子树处理更新（若 childLanes 中没有高优先级车道，可跳过子树）。
- * */ 
+ * */
 function markUpdateLaneFromFiberToRoot(
     sourceFiber: Fiber,
     lane: Lane
@@ -50,7 +54,7 @@ function markUpdateLaneFromFiberToRoot(
     // 3. 向上遍历父节点，标记所有祖先节点的 childLanes（子树更新车道集合）
     let node = sourceFiber
     let parent = sourceFiber.return
-    while(parent !== null) {
+    while (parent !== null) {
         // 父节点的 childLanes 记录子树中所有更新的车道（合并当前车道）
         parent.childLanes = mergeLanes(parent.childLanes, lane)
         // 同样处理父节点的备用节点

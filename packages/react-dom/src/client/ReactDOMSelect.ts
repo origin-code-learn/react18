@@ -7,3 +7,7 @@ export function getHostProps(element: Element, props: Object) {
 export function postUpdateWrapper(element: Element, props: Object) {
     debugger
 }
+
+export function restoreControlledState(element: Element, props: Object) {
+    debugger
+}

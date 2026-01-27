@@ -7,5 +7,19 @@ export type ToStringValue =
   | void;
 
 export function toString(value: ToStringValue): string {
-    return '' + value
+  return '' + value
+}
+
+export function getToStringValue(value: any): ToStringValue {
+  switch (typeof value) {
+    case 'boolean':
+    case 'number':
+    case 'string':
+    case 'undefined':
+      return value
+    case 'object':
+      return value
+    default:
+      return ''
+  }
 }

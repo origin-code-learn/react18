@@ -1,8 +1,12 @@
 import { ReactContext } from "shared/ReactTypes";
 import { ContextDependency, Fiber } from "./ReactInternalTypes";
-import { includesSomeLane, Lanes } from "./ReactFiberLane.old";
-import { enableLazyContextPropagation } from "shared/ReactFeatureFlags";
+import { includesSomeLane, Lanes, NoLanes } from "./ReactFiberLane.old";
+import { enableLazyContextPropagation, enableServerContext } from "shared/ReactFeatureFlags";
 import { markWorkInProgressReceivedUpdate } from "./ReactFiberBeginWork.old";
+import { isPrimaryRenderer } from "./ReactFiberHostConfig";
+import { createCursor, pop, push, StackCursor } from "./ReactFiberStack.old";
+import { NeedsPropagation } from "./ReactFiberFlags";
+import { REACT_SERVER_CONTEXT_DEFAULT_VALUE_NOT_LOADED } from "shared/ReactSymbols";
 
 // 指向当前正在渲染的 Fiber 节点。上下文系统需要知道 “哪个组件在读取上下文”，以便记录依赖关系。
 let currentlyRenderingFiber: Fiber | null = null;
@@ -11,6 +15,8 @@ let lastContextDependency: ContextDependency<any> | null = null;
 // 用于追踪完全被观察的上下文（与并发模式下的上下文部分更新有关）。
 let lastFullyObservedContext: ReactContext<any> | null = null;
 
+const valueCursor: StackCursor<any> = createCursor(null);
+
 export function resetContextDependencies() {
     currentlyRenderingFiber = null
     lastContextDependency = null;
@@ -18,8 +24,33 @@ export function resetContextDependencies() {
 }
 
 export function readContext<T>(context: ReactContext<T>): T {
-    const value = {}
-    debugger
+    const value = isPrimaryRenderer ? context._currentValue : context._currentValue2
+    if (lastFullyObservedContext === context) {
+
+    } else {
+        const contextItem = {
+            context: context as ReactContext<any>,
+            memoizedValue: value,
+            next: null
+        }
+
+        if (lastContextDependency === null) {
+            if (currentlyRenderingFiber === null) {
+                throw new Error('readContext 读取失败')
+            }
+            lastContextDependency = contextItem
+            currentlyRenderingFiber.dependencies = {
+                lanes: NoLanes,
+                firstContext: contextItem
+            }
+            if (enableLazyContextPropagation) {
+                currentlyRenderingFiber.flags |= NeedsPropagation
+            }
+        } else {
+            lastContextDependency = lastContextDependency.next = contextItem
+        }
+    }
+    return value
 }
 
 /**
@@ -69,3 +100,43 @@ export function lazilyPropagateParentContextChanges(
     propagateParentContextChanges(current, workInProgress, renderLanes, forcePropagateEntireTree)
 }
 
+export function pushProvider<T>(
+    providerFiber: Fiber,
+    context: ReactContext<T>,
+    newValue: T
+) {
+    if (isPrimaryRenderer) {
+        push(valueCursor, context._currentValue, providerFiber)
+        context._currentValue = newValue
+    } else {
+        push(valueCursor, context._currentValue2, providerFiber)
+        context._currentValue2 = newValue
+    }
+}
+
+export function popProvider(
+    context: ReactContext<any>, 
+    providerFiber: Fiber
+) {
+    const currentValue = valueCursor.current
+    pop(valueCursor, providerFiber)
+    if (isPrimaryRenderer) {
+        if (
+            enableServerContext &&
+            currentValue === REACT_SERVER_CONTEXT_DEFAULT_VALUE_NOT_LOADED
+        ) {
+            context._currentValue = context._defaultValue;
+        } else {
+            context._currentValue = currentValue;
+        }
+    } else {
+        if (
+            enableServerContext &&
+            currentValue === REACT_SERVER_CONTEXT_DEFAULT_VALUE_NOT_LOADED
+        ) {
+            context._currentValue2 = context._defaultValue;
+        } else {
+            context._currentValue2 = currentValue;
+        }
+    }
+}

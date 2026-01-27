@@ -1,4 +1,4 @@
-import { DiscreteEventPriority, getCurrentUpdatePriority, setCurrentUpdatePriority } from "./ReactEventPriorities.old";
+import { DiscreteEventPriority, getCurrentUpdatePriority, setCurrentUpdatePriority } from "./ReactEventPriorities";
 import { ImmediatePriority, scheduleCallback, SchedulerCallback } from "./Scheduler";
 
 // 同步回调队列：存储需要同步执行的回调函数

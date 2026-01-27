@@ -2,8 +2,8 @@ import type { FiberRoot, TransitionTracingCallbacks } from "react-reconciler/src
 import type { MutableSource, ReactNodeList } from "shared/ReactTypes";
 import { ConcurrentRoot } from 'react-reconciler/src/ReactRootTags';
 import { createContainer, updateContainer } from 'react-reconciler/src/ReactFiberReconciler';
-import { allowConcurrentByDefault } from "shared/ReactFeatureFlags";
-import { COMMENT_NODE } from "../shared/HTMLNodeType";
+import { allowConcurrentByDefault, disableCommentsAsDOMContainers } from "shared/ReactFeatureFlags";
+import { COMMENT_NODE, DOCUMENT_FRAGMENT_NODE, DOCUMENT_NODE, ELEMENT_NODE } from "../shared/HTMLNodeType";
 import { listenToAllSupportedEvents } from "../events/DOMPluginEventSystem";
 
 export type RootType = {
@@ -32,6 +32,14 @@ export type HydrateRootOptions = {
 }
 
 const defaultOnRecoverableError = typeof reportError === 'function' ? reportError : (error: any) => console.error(error)
+
+export function isValidContainer(node: any): boolean {
+    return !!(
+        node &&
+        ([ELEMENT_NODE, DOCUMENT_NODE, DOCUMENT_FRAGMENT_NODE].includes(node.nodeType) ||
+            (!disableCommentsAsDOMContainers && node.nodeType === COMMENT_NODE && node.nodeValue === ' react-mount-point-unstable '))
+    )
+}
 
 function ReactDOMRoot(internalRoot: FiberRoot) {
     this._internalRoot = internalRoot

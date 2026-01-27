@@ -4,13 +4,15 @@ import { Lanes, NoLanes } from "./ReactFiberLane.old";
 import { Fiber } from "./ReactInternalTypes";
 import { ConcurrentRoot, RootTag } from "./ReactRootTags";
 import { ConcurrentMode, NoMode, ProfileMode, StrictEffectsMode, StrictLegacyMode, TypeOfMode } from "./ReactTypeOfMode";
-import { ClassComponent, Fragment, HostComponent, HostPortal, HostRoot, HostText, IndeterminateComponent, WorkTag } from "./ReactWorkTags";
+import { ClassComponent, ContextConsumer, ContextProvider, ForwardRef, Fragment, FunctionComponent, HostComponent, HostPortal, HostRoot, HostText, IndeterminateComponent, LazyComponent, MemoComponent, OffscreenComponent, SuspenseComponent, WorkTag } from "./ReactWorkTags";
 import { ReactElement } from "shared/ReactElementType";
 import { ReactFragment, ReactPortal } from "shared/ReactTypes";
+import { REACT_CACHE_TYPE, REACT_CONTEXT_TYPE, REACT_DEBUG_TRACING_MODE_TYPE, REACT_FORWARD_REF_TYPE, REACT_FRAGMENT_TYPE, REACT_LAZY_TYPE, REACT_LEGACY_HIDDEN_TYPE, REACT_MEMO_TYPE, REACT_OFFSCREEN_TYPE, REACT_PROFILER_TYPE, REACT_PROVIDER_TYPE, REACT_SCOPE_TYPE, REACT_STRICT_MODE_TYPE, REACT_SUSPENSE_LIST_TYPE, REACT_SUSPENSE_TYPE, REACT_TRACING_MARKER_TYPE } from "shared/ReactSymbols";
+import { OffscreenInstance, OffscreenProps } from "./ReactFiberOffscreenComponent";
 
 function shouldConstruct(Component: Function) {
     const prototype = Component.prototype
-    return !! (prototype && prototype.isReactComponent)
+    return !!(prototype && prototype.isReactComponent)
 }
 
 // Fiber 节点的构造函数
@@ -34,7 +36,7 @@ function FiberNode(
     this.index = 0
 
     this.ref = null
-    
+
     this.pendingProps = pendingProps
     this.memoizedProps = null
     this.updateQueue = null
@@ -52,7 +54,7 @@ function FiberNode(
     this.childLanes = NoLanes
 
     this.alternate = null
-    
+
 }
 
 export function createHostRootFiber(
@@ -142,6 +144,18 @@ export function createFiberFromText(
     return fiber
 }
 
+export function createFiberFromSuspense(
+    pendingProps: any,
+    mode: TypeOfMode,
+    lanes: Lanes,
+    key: null | string
+) {
+    const fiber = createFiber(SuspenseComponent, pendingProps, key, mode)
+    fiber.elementType = REACT_SUSPENSE_TYPE
+    fiber.lanes = lanes
+    return fiber
+}
+
 export function createFiberFromTypeAndProps(
     type: any,
     key: null | string,
@@ -159,7 +173,53 @@ export function createFiberFromTypeAndProps(
     } else if (typeof type === 'string') {
         fiberTag = HostComponent
     } else {
-        debugger
+        getTag: switch (type) {
+            case REACT_FRAGMENT_TYPE:
+                return createFiberFromFragment(pendingProps.children, mode, lanes, key)
+            case REACT_STRICT_MODE_TYPE:
+                debugger
+            case REACT_PROFILER_TYPE:
+                debugger
+            case REACT_SUSPENSE_TYPE:
+                return createFiberFromSuspense(pendingProps, mode, lanes, key)
+            case REACT_SUSPENSE_LIST_TYPE:
+                debugger
+            case REACT_OFFSCREEN_TYPE:
+                debugger
+            case REACT_LEGACY_HIDDEN_TYPE:
+                debugger
+            case REACT_SCOPE_TYPE:
+                debugger
+            case REACT_CACHE_TYPE:
+                debugger
+            case REACT_TRACING_MARKER_TYPE:
+                debugger
+            case REACT_DEBUG_TRACING_MODE_TYPE:
+                debugger
+            default: {
+                if (typeof type === 'object' && type !== null) {
+                    switch (type.$$typeof) {
+                        case REACT_PROVIDER_TYPE:
+                            fiberTag = ContextProvider
+                            break getTag
+                        case REACT_CONTEXT_TYPE:
+                            fiberTag = ContextConsumer
+                            break getTag
+                        case REACT_FORWARD_REF_TYPE:
+                            fiberTag = ForwardRef
+                            break getTag
+                        case REACT_MEMO_TYPE:
+                            fiberTag = MemoComponent
+                            break getTag
+                        case REACT_LAZY_TYPE:
+                            fiberTag = LazyComponent
+                            resolvedType = null
+                            break getTag
+                    }
+                }
+                throw new Error(`不支持的类型: ${type}`)
+            }
+        }
     }
     const fiber = createFiber(fiberTag, pendingProps, key, mode)
     fiber.elementType = type
@@ -211,4 +271,37 @@ export function createFiberFromPortal(
         implementation: portal.implementation  // Portal 的渲染实现（内部使用）
     }
     return fiber
+}
+
+export function createFiberFromOffscreen(
+    pendingProps: OffscreenProps,
+    mode: TypeOfMode,
+    lanes: Lanes,
+    key: null | string
+) {
+    const fiber = createFiber(OffscreenComponent, pendingProps, key, mode)
+    fiber.elementType = REACT_OFFSCREEN_TYPE
+    fiber.lanes = lanes
+    // 创建 Offscreen 实例（stateNode），初始化可见状态
+    const primaryChildInstance: OffscreenInstance = {
+        isHidden: false // 核心状态：默认不隐藏（可见）
+    }
+    // 将实例绑定到 Fiber 的 stateNode 属性（存储运行时状态）
+    fiber.stateNode = primaryChildInstance
+    return fiber
+}
+
+export function resolveLazyComponentTag(Component: Function): WorkTag {
+    if (typeof Component === 'function') {
+        return shouldConstruct(Component) ? ClassComponent : FunctionComponent
+    } else if (Component !== undefined && Component !== null) {
+        const $$typeof = (Component as any).$$typeof
+        if ($$typeof === REACT_FORWARD_REF_TYPE) {
+            return ForwardRef
+        }
+        if ($$typeof === REACT_MEMO_TYPE) {
+            return MemoComponent
+        }
+    }
+    return IndeterminateComponent
 }

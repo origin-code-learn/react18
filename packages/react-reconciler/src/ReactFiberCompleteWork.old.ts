@@ -1,16 +1,23 @@
 import { popTopLevelLegacyContextObject } from "./ReactFiberContext.old";
-import { ForceClientRender, NoFlags, Ref, RefStatic, Snapshot, StaticMask, Update } from "./ReactFiberFlags";
+import { DidCapture, ForceClientRender, NoFlags, Passive, Placement, Ref, RefStatic, ShouldCapture, Snapshot, StaticMask, Update, Visibility } from "./ReactFiberFlags";
 import { getHostContext, getRootHostContainer, popHostContainer, popHostContext } from "./ReactFiberHostContext.old";
-import { Lanes, mergeLanes, NoLanes } from "./ReactFiberLane.old";
+import { includesSomeLane, Lanes, mergeLanes, NoLanes, OffscreenLane } from "./ReactFiberLane.old";
 import { popTreeContext } from "./ReactFiberTreeContext.old";
 import { Fiber } from "./ReactInternalTypes";
 import { CacheComponent, ClassComponent, ContextConsumer, ContextProvider, ForwardRef, Fragment, FunctionComponent, HostComponent, HostPortal, HostRoot, HostText, IncompleteClassComponent, IndeterminateComponent, LazyComponent, LegacyHiddenComponent, MemoComponent, Mode, OffscreenComponent, Profiler, ScopeComponent, SimpleMemoComponent, SuspenseComponent, SuspenseListComponent, TracingMarkerComponent } from "./ReactWorkTags";
-import {resetWorkInProgressVersions as resetMutableSourceWorkInProgressVersions} from './ReactMutableSource.old';
+import { resetWorkInProgressVersions as resetMutableSourceWorkInProgressVersions } from './ReactMutableSource.old';
 import { popHydrationState, upgradeHydrationErrorsToRecoverable } from "./ReactFiberHydrationContext.old";
 import { RootState } from "./ReactFiberRoot.old";
-import { appendInitialChild, ChildSet, Container, createInstance, finalizeInitialChildren, Instance, prepareUpdate, Props, supportsMutation, supportsPersistence, Type, UpdatePayload } from "ReactDOMHostConfig";
-import { enableProfilerTimer, enableSuspenseLayoutEffectSemantics } from "shared/ReactFeatureFlags";
-import { NoMode, ProfileMode } from "./ReactTypeOfMode";
+import { appendInitialChild, ChildSet, Container, createInstance, createTextInstance, finalizeInitialChildren, Instance, prepareUpdate, Props, supportsMutation, supportsPersistence, Type, UpdatePayload, preparePortalMount } from "ReactDOMHostConfig";
+import { enableCache, enableLegacyHidden, enableProfilerTimer, enableSuspenseAvoidThisFallback, enableSuspenseCallback, enableSuspenseLayoutEffectSemantics, enableTransitionTracing } from "shared/ReactFeatureFlags";
+import { ConcurrentMode, NoMode, ProfileMode } from "./ReactTypeOfMode";
+import { ReactContext, Wakeable } from "shared/ReactTypes";
+import { popProvider } from "./ReactFiberNewContext.old";
+import { hasSuspenseContext, InvisibleParentSuspenseContext, popSuspenseContext, suspenseStackCursor } from "./ReactFiberSuspenseContext";
+import { SuspenseState } from "./ReactFiberSuspenseComponent.old";
+import { popRenderLanes, renderDidSuspend, renderDidSuspendDelayIfPossible, subtreeRenderLanes } from "./ReactFiberWorkLoop.old";
+import { OffscreenState } from "./ReactFiberOffscreenComponent";
+import { popTransition } from "./ReactFiberTransition";
 
 let appendAllChildren;  // 子节点挂载
 let updateHostContainer;  // 容器更新
@@ -59,7 +66,9 @@ if (supportsMutation) {
         }
     }
     updateHostText = function (current: Fiber, workInProgress: Fiber, oldText: string, newText: string) {
-        debugger
+        if (oldText !== newText) {
+            markUpdate(workInProgress)
+        }
     }
 } else if (supportsPersistence) {
     appendAllChildren = function (parent: Instance, workInProgress: Fiber, needsVisibilityToggle: boolean, isHidden: boolean) {
@@ -89,6 +98,16 @@ if (supportsMutation) {
     }
 }
 
+function completeDehydratedSuspenseBoundary(
+    current: Fiber | null,
+    workInProgress: Fiber,
+    nextState: SuspenseState | null
+): boolean {
+    debugger
+
+    return true
+}
+
 /**
  * bubbleProperties 是 React Fiber 架构中渲染阶段结束时的关键函数，主要作用是将子节点的属性（如优先级 lanes、标记 flags、性能数据等）“冒泡” 到父节点，确保整个 Fiber 树的状态一致性，并为后续的提交阶段（commit）准备必要信息。
  * 在 React 的渲染阶段（reconciliation），Fiber 节点会按深度优先遍历的顺序处理。当一个节点完成渲染后（completedWork），需要将其所有子节点的关键信息向上合并到自身，这个过程称为 “冒泡”。这样，父节点就能掌握整个子树的状态，便于后续的优先级调度和提交操作。
@@ -99,13 +118,13 @@ function bubbleProperties(completedWork: Fiber) {
      *  判定依据：当前节点存在备用节点（alternate，上一次渲染的 Fiber 节点），且子节点引用与上一次完全相同（alternate.child === child）
      *  若为 true：子树未重新渲染，只需处理静态标记和基础数据
      *  若为 false：子树已重新渲染，需合并所有子节点的动态信息
-     * */ 
+     * */
     const didBailout = completedWork.alternate !== null && completedWork.alternate.child === completedWork.child
     let newChildLanes = NoLanes // 收集所有子节点（及后代）的优先级 lanes，用于父节点判断是否需要因子树更新而重渲染。
     let subtreeFlags = NoFlags  // 收集所有子节点（及后代）的标记（如更新、删除、Suspense 等），用于提交阶段处理副作用。
     if (!didBailout) {
         let child = completedWork.child
-        while(child !== null) {
+        while (child !== null) {
             // 合并优先级 lanes
             newChildLanes = mergeLanes(newChildLanes, mergeLanes(child.lanes, child.childLanes))
             // 合并所有标记
@@ -235,19 +254,106 @@ export function completeWork(
 
             bubbleProperties(workInProgress)
             return null
-            
+
         }
         case HostText: {
-            debugger
+            const newText = newProps
+            if (current && workInProgress.stateNode != null) {
+                const oldText = current.memoizedProps
+                updateHostText(current, workInProgress, oldText, newText)
+            } else {
+                if (typeof newText !== 'string') {
+                    if (workInProgress.stateNode === null) {
+                        throw new Error('completeWork HostText 阶段出错了')
+                    }
+                }
+                const rootContainerInstance = getRootHostContainer()
+                const currentHostContext = getHostContext()
+                const wasHydrated = popHydrationState(workInProgress)
+                if (wasHydrated) {
+                    if (prepareToHydrateHostTextInstance(workInProgress)) {
+                        markUpdate(workInProgress)
+                    }
+                } else {
+                    workInProgress.stateNode = createTextInstance(newText, rootContainerInstance, currentHostContext, workInProgress)
+                }
+            }
+            bubbleProperties(workInProgress)
+            return null
         }
         case SuspenseComponent: {
-            debugger
+            popSuspenseContext(workInProgress)
+            const nextState: null | SuspenseState = workInProgress.memoizedState
+            if (current === null || (current.memoizedState !== null && current.memoizedState.dehydrated !== null)) {
+                const fallthroughToNormalSuspensePath = completeDehydratedSuspenseBoundary(current, workInProgress, nextState)
+                if (!fallthroughToNormalSuspensePath) {
+                    if (workInProgress.flags & ShouldCapture) {
+                        return workInProgress
+                    } else {
+                        return null
+                    }
+                }
+            }
+
+            if ((workInProgress.flags & DidCapture) !== NoFlags) {
+                debugger
+            }
+
+            const nextDidTimeout = nextState !== null
+            const prevDidTimeout = current !== null && (current.memoizedState !== null)
+            if (enableCache && nextDidTimeout) {
+                debugger
+            }
+
+            if (nextDidTimeout !== prevDidTimeout) {
+                if (enableTransitionTracing) {
+                    const offscreenFiber: Fiber = workInProgress.child as any
+                    offscreenFiber.flags |= Passive
+                }
+                if (nextDidTimeout) {
+                    const offscreenFiber: Fiber = workInProgress.child as any
+                    offscreenFiber.flags |= Visibility
+                    if ((workInProgress.mode & ConcurrentMode) !== NoMode) {
+                        const hasInvisibleChildContext = current === null && (workInProgress.memoizedProps.unstable_avoidThisFallback !== true || !enableSuspenseAvoidThisFallback)
+                        if (hasInvisibleChildContext || hasSuspenseContext(suspenseStackCursor.current, InvisibleParentSuspenseContext)) {
+                            renderDidSuspend()
+                        } else {
+                            renderDidSuspendDelayIfPossible()
+                        }
+                    }
+                }
+            }
+
+            const wakeables: Set<Wakeable> | null = workInProgress.updateQueue as any
+            if (wakeables !== null) {
+                workInProgress.flags |= Update
+            }
+
+            if (enableSuspenseCallback && workInProgress.updateQueue !== null && workInProgress.memoizedProps.suspenseCallback !== null) {
+                debugger
+            }
+
+            bubbleProperties(workInProgress)
+            if (enableProfilerTimer) {
+                debugger
+            }
+
+            return null
         }
         case HostPortal: {
-            debugger
+            popHostContainer(workInProgress)
+            updateHostContainer(current, workInProgress)
+            if (current === null) {
+                preparePortalMount(workInProgress.stateNode.containerInfo)
+            }
+            bubbleProperties(workInProgress)
+            return null
         }
         case ContextProvider: {
-            debugger
+            const context: ReactContext<any> = workInProgress.type._context
+            popProvider(context, workInProgress)
+            bubbleProperties(workInProgress)
+            return null
         }
         case IncompleteClassComponent: {
             debugger
@@ -258,11 +364,36 @@ export function completeWork(
         case ScopeComponent: {
             debugger
         }
-        case OffscreenComponent: {
-            debugger
-        }
+        case OffscreenComponent:
         case LegacyHiddenComponent: {
-            debugger
+            popRenderLanes(workInProgress)
+            const nextState: OffscreenState | null = workInProgress.memoizedState
+            const nextIsHidden = nextState !== null
+            if (current !== null) {
+                const prevState: OffscreenState | null = current.memoizedState
+                const prevIsHidden = prevState !== null
+                if (prevIsHidden !== nextIsHidden && (!enableLegacyHidden || workInProgress.tag !== LegacyHiddenComponent)) {
+                    workInProgress.flags |= Visibility
+                }
+            }
+            if (!nextIsHidden || (workInProgress.mode & ConcurrentMode) === NoMode) {
+                bubbleProperties(workInProgress)
+            } else {
+                if (includesSomeLane(subtreeRenderLanes, OffscreenLane)) {
+                    bubbleProperties(workInProgress)
+                    if (supportsMutation) {
+                        if ((!enableLegacyHidden || workInProgress.tag !== LegacyHiddenComponent) && workInProgress.subtreeFlags & (Placement | Update)) {
+                            workInProgress.flags |= Visibility
+                        }
+                    }
+                }
+            }
+
+            if (enableCache) {
+                debugger
+            }
+            popTransition(workInProgress, current)
+            return null
         }
         case CacheComponent: {
             debugger
@@ -270,8 +401,8 @@ export function completeWork(
         case TracingMarkerComponent: {
             debugger
         }
-        
-        throw new Error(`Unknown unit of work tag (${workInProgress.tag}). This error is likely caused by a bug in React, Please file an issue.`)
+
+            throw new Error(`Unknown unit of work tag (${workInProgress.tag}). This error is likely caused by a bug in React, Please file an issue.`)
     }
 }
 

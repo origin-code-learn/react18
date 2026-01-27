@@ -7,6 +7,8 @@ export const now = Scheduler.unstable_now;
 export const cancelCallback = Scheduler.unstable_cancelCallback
 export const scheduleCallback = Scheduler.unstable_scheduleCallback;
 
+export const shouldYield = Scheduler.unstable_shouldYield
+
 export const getCurrentPriorityLevel = Scheduler.unstable_getCurrentPriorityLevel
 export const ImmediatePriority = Scheduler.unstable_ImmediatePriority
 export const UserBlockingPriority = Scheduler.unstable_UserBlockingPriority

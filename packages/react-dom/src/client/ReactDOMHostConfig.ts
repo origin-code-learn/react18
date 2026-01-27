@@ -1,6 +1,6 @@
 import { DefaultEventPriority } from "react-reconciler/src/ReactEventPriorities";
 import { FiberRoot } from "react-reconciler/src/ReactInternalTypes";
-import { 
+import {
     getEventPriority,
     isEnabled as ReactBrowserEventEmitterIsEnabled,
     setEnabled as ReactBrowserEventEmitterSetEnabled,
@@ -12,7 +12,11 @@ import { getSelectionInformation, restoreSelection } from "./ReactInputSelection
 import { enableCreateEventHandleAPI } from "shared/ReactFeatureFlags";
 import { getClosestInstanceFromNode, precacheFiberNode, updateFiberProps } from "./ReactDOMComponentTree";
 import setTextContent from "./setTextContent";
-import { createElement, diffProperties, setInitialProperties, trapClickOnNonInteractiveElement, updateProperties } from "./ReactDOMComponent";
+import { createElement, createTextNode, diffProperties, setInitialProperties, trapClickOnNonInteractiveElement, updateProperties } from "./ReactDOMComponent";
+import dangerousStyleValue from "../shared/dangerousStyleValue";
+import { listenToAllSupportedEvents } from "../events/DOMPluginEventSystem";
+
+export { detachDeletedInstance } from "./ReactDOMComponentTree";
 export type Type = string
 export type Props = {
     autoFocus?: boolean,
@@ -21,7 +25,7 @@ export type Props = {
     hidden?: boolean,
     suppressHydrationWarning?: boolean,
     dangerouslySetInnerHTML?: any,
-    style?: {display?: string }
+    style?: { display?: string }
     bottom?: null | number,
     left?: null | number,
     right?: null | number,
@@ -32,23 +36,23 @@ export type EventTargetChildElement = {
     type: string,
     props: null | {
         style?: {
-        position?: string,
-        zIndex?: number,
-        bottom?: string,
-        left?: string,
-        right?: string,
-        top?: string,
+            position?: string,
+            zIndex?: number,
+            bottom?: string,
+            left?: string,
+            right?: string,
+            top?: string,
         }
     },
 }
 
 export type Container =
- | (Element & { _reactRootContainer?: FiberRoot, [key: string]: any })
- | (Document & { _reactRootContainer?: FiberRoot, [key: string]: any })
- | (DocumentFragment & { _reactRootContainer?: FiberRoot, [key: string]: any })
+    | (Element & { _reactRootContainer?: FiberRoot, [key: string]: any })
+    | (Document & { _reactRootContainer?: FiberRoot, [key: string]: any })
+    | (DocumentFragment & { _reactRootContainer?: FiberRoot, [key: string]: any })
 
 export type Instance = Element
-export type TextInstance = Text 
+export type TextInstance = Text
 export type SuspenseInstance = Comment & { __reactRetry?: () => void }
 export type HydratableInstance = Instance | TextInstance | SuspenseInstance
 export type PublicInstance = Element | Text
@@ -92,6 +96,8 @@ export const supportsHydration = true  // 表示当前环境支持 hydration（�
 export const supportsMutation = true   // 直接修改现有 DOM 树（如浏览器环境常用的 appendChild、setAttribute 等），适合客户端动态更新。
 export const supportsPersistence = false // 不直接修改现有 DOM，而是创建新的 DOM 片段替换旧内容（如某些静态站点生成或特殊渲染场景），避免直接操作现有节点
 
+export const isPrimaryRenderer = true
+
 export const supportsMicrotasks = true
 export const scheduleMicrotask = typeof queueMicrotask === 'function' ? queueMicrotask : typeof localPromise !== 'undefined' ? callback => localPromise.resolve(null).then(callback).catch(handleErrorInNextTick) : scheduleTimeout
 function handleErrorInNextTick(error) {
@@ -108,16 +114,28 @@ export function getCurrentEventPriority() {
     return getEventPriority(currentEvent.type as DOMEventName)
 }
 
+export function getPublicInstance(instance: Instance) {
+    return instance
+}
+
+export function isSuspenseInstancePending(instance: SuspenseInstance) {
+    return instance.data === SUSPENSE_PENDING_START_DATA
+}
+
+export function isSuspenseInstanceFallback(instance: SuspenseInstance) {
+    return instance.data === SUSPENSE_FALLBACK_START_DATA
+}
+
 /**
  * 在 React 中，“宿主环境” 通常指 DOM 环境（浏览器）。当 React 渲染组件时，需要知道根容器的类型（如普通 DOM 元素、文档片段、文档节点等）和命名空间（如 HTML、SVG 等），才能正确创建和挂载元素。
  * HostContext 包含了这些关键信息，确保 React 在生成 DOM 节点时使用正确的命名空间和渲染规则（例如 SVG 元素需要在 SVG 命名空间下创建）。
  * 
 */
-export function getRootHostContext(rootContainerInstance: Container): HostContext{
+export function getRootHostContext(rootContainerInstance: Container): HostContext {
     let type // 根容器的类型标识
     let namespace  // 根容器的命名空间
     const nodeType = rootContainerInstance.nodeType // 根容器的节点类型（DOM 节点类型常量）
-    switch(nodeType) {
+    switch (nodeType) {
         case DOCUMENT_NODE:  // 9：文档节点（如 document）
         case DOCUMENT_FRAGMENT_NODE: // 11：文档片段节点（如 document.createDocumentFragment()）
             type = nodeType === DOCUMENT_NODE ? '#document' : '#fragment' // 类型标识：文档节点为 '#document'，文档片段为 '#fragment'
@@ -151,7 +169,7 @@ export function getParentSuspenseInstance(
     let node: any = targetInstance.previousSibling
     // 跟踪嵌套深度：处理嵌套的 Suspense 组件（如 Suspense 内部包含另一个 Suspense）
     let depth = 0
-    while(node) {
+    while (node) {
         // 2. 只处理注释节点（Suspense 标记通过注释节点实现）
         if (node.nodeType === COMMENT_NODE) {
             const data = node.data  // 注释节点的内容（如 "Suspense start"）
@@ -223,7 +241,7 @@ export function resetAfterCommit(containerInfo: Container) {
  * createInstance 是 React 中为宿主组件（如 <div>、<span> 等原生 DOM 元素）创建真实 DOM 实例的核心函数。它负责根据元素类型和属性生成对应的 DOM 节点，建立 Fiber 节点与 DOM 节点的关联，并为后续操作（如属性更新、事件绑定）奠定基础。
  * 
 */
-export function createInstance (
+export function createInstance(
     type: string,
     props: Props,
     rootContainerInstance: Container,
@@ -386,4 +404,75 @@ export function commitUpdate(
 ) {
     updateProperties(domElement, updatePayload, type, oldProps, newProps)
     updateFiberProps(domElement, newProps)
+}
+
+export function removeChild(
+    parentInstance: Instance,
+    child: Instance | TextInstance | SuspenseInstance
+) {
+    parentInstance.removeChild(child)
+}
+
+export function removeChildFromContainer(
+    container: Container,
+    child: Instance | TextInstance | SuspenseInstance
+) {
+    if (container.nodeType === COMMENT_NODE) {
+        container.parentNode?.removeChild(child)
+    } else {
+        container.removeChild(child)
+    }
+}
+
+export function insertBefore(
+    parentInstance: Instance,
+    child: Instance | TextInstance,
+    beforeChild: Instance | TextInstance | SuspenseInstance
+) {
+    parentInstance.insertBefore(child, beforeChild)
+}
+
+export function appendChild(
+    parentInstance: Instance,
+    child: Instance | TextInstance
+) {
+    parentInstance.appendChild(child)
+}
+
+export function createTextInstance(
+    text: string,
+    rootContainerInstance: Container,
+    hostContext: HostContext,
+    internalInstanceHandle: Object
+): TextInstance {
+    const textNode: TextInstance = createTextNode(text, rootContainerInstance)
+    precacheFiberNode(internalInstanceHandle as any, textNode)
+    return textNode
+}
+
+export function hideInstance(instance: Instance) {
+    const style = (instance as HTMLElement).style
+    if (typeof style.setProperty === 'function') {
+        style.setProperty('display', 'none', 'important')
+    } else {
+        style.display = 'none'
+    }
+}
+
+export function unhideInstance(instance: Instance, props: Props) {
+    const styleProp = props[STYLE]
+    const display = styleProp !== undefined && styleProp !== null && styleProp.hasOwnProperty('display') ? styleProp.display : null;
+    (instance as HTMLElement).style.display = dangerousStyleValue('display', display, false)
+}
+
+export function hideTextInstance(textInstance: TextInstance) {
+    textInstance.nodeValue = ''
+}
+
+export function unhideTextInstance(textInstance: TextInstance, text: string) {
+    textInstance.nodeValue = text
+}
+
+export function preparePortalMount(portalInstance: Instance) {
+    listenToAllSupportedEvents(portalInstance)
 }

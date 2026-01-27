@@ -1,5 +1,5 @@
 import { enableCustomElementPropertySupport } from "shared/ReactFeatureFlags"
-import { getPropertyInfo, PropertyInfo, shouldIgnoreAttribute, shouldRemoveAttribute } from "../shared/DOMProperty"
+import { BOOLEAN, getPropertyInfo, isAttributeNameSafe, PropertyInfo, shouldIgnoreAttribute, shouldRemoveAttribute } from "../shared/DOMProperty"
 
 export function setValueForProperty(
     node: Element,
@@ -7,7 +7,6 @@ export function setValueForProperty(
     value: any,
     isCustomComponentTag: boolean
 ) {
-    debugger
     // 1. 属性元信息与过滤（前期准备）
     const propertyInfo: PropertyInfo | null = getPropertyInfo(name)
     if (shouldIgnoreAttribute(name, propertyInfo, isCustomComponentTag)) {
@@ -34,22 +33,37 @@ export function setValueForProperty(
         debugger
     }
     if (shouldRemoveAttribute(name, value, propertyInfo, isCustomComponentTag)) {
-        debugger
+        value = null
     }
     if (enableCustomElementPropertySupport) {
         debugger
     }
     if (isCustomComponentTag || propertyInfo === null) {
-        debugger
+        if (isAttributeNameSafe(name)) {
+            const attributeName = name
+            if (value === null) {
+                node.removeAttribute(attributeName)
+            } else {
+                node.setAttribute(attributeName, value)
+            }
+        }
+        return
     }
 
     const { mustUseProperty } = propertyInfo as PropertyInfo
     if (mustUseProperty) {
-        debugger
+        const { propertyName } = propertyInfo
+        if (value === null) {
+            const { type } = propertyInfo
+            node[propertyName] = type === BOOLEAN ? false : ''
+        } else {
+            node[propertyName] = value
+        }
+        return
     }
-    const { attributeName, attributeNamespace } = propertyInfo
+    const { attributeName, attributeNamespace } = propertyInfo as any
     if (value === null) {
-        debugger
+        node.removeAttribute(attributeName)
     } else {
         debugger
     }

@@ -11,7 +11,7 @@ function shouldPreventMouseEvent(
     type: string,
     props: Props
 ): boolean {
-    switch(name) {
+    switch (name) {
         case 'onClick':
         case 'onClickCapture':
         case 'onDoubleClick':
@@ -57,5 +57,5 @@ export function getListener(
         throw new Error('getListener 方法出错了， listener 应该是个 function')
     }
 
-    return listener
+    return listener || null
 }

@@ -1,6 +1,6 @@
 import { Fiber } from "react-reconciler/src/ReactInternalTypes";
 import { HostComponent, HostRoot, HostText, SuspenseComponent } from "react-reconciler/src/ReactWorkTags";
-import { getParentSuspenseInstance, Instance, Props, SuspenseInstance, TextInstance } from "ReactDOMHostConfig";
+import { Container, getParentSuspenseInstance, Instance, Props, SuspenseInstance, TextInstance } from "ReactDOMHostConfig";
 import { ReactScopeInstance } from "shared/ReactTypes";
 import { ReactDOMEventHandleListener } from "../shared/ReactDOMTypes";
 
@@ -19,6 +19,10 @@ const internalEventHandlerListenersKey = '__reactListeners$' + randomKey;
 // 存储与事件处理相关的 句柄集合（如用于清理事件监听的标识），确保组件卸载时能正确移除所有事件监听，避免内存泄漏。
 const internalEventHandlesSetKey = '__reactHandles$' + randomKey;
 
+export function isContainerMarkedAsRoot(node: Container): boolean {
+    return !!node[internalContainerInstanceKey]
+}
+
 // getClosestInstanceFromNode 是 React 内部用于从 DOM 节点反向查找最近关联的 React Fiber 实例的核心函数
 export function getClosestInstanceFromNode(targetNode: Node): null | Fiber {
     // 1. 尝试从目标节点直接获取关联的 Fiber 实例
@@ -34,7 +38,7 @@ export function getClosestInstanceFromNode(targetNode: Node): null | Fiber {
     while (parentNode) {
         // 检查父节点是否是 React 容器实例（internalContainerInstanceKey）或普通实例（internalInstanceKey）
         targetInst = parentNode[internalContainerInstanceKey] ||  // 容器实例（如根容器）
-                     parentNode[internalInstanceKey] // 普通组件实例
+            parentNode[internalInstanceKey] // 普通组件实例
         if (targetInst) {
             // 3. 若找到实例，处理可能存在的未 hydration 的 Suspense 边界
             // 检查实例是否有子节点（包括 alternate 节点的子节点），判断是否可能包含 Suspense 组件
@@ -86,8 +90,8 @@ export function getInstanceFromNode(node: Node): Fiber | null {
     if (inst) {
         if (
             inst.tag === HostComponent ||
-            inst.tag === HostText || 
-            inst.tag === SuspenseComponent || 
+            inst.tag === HostText ||
+            inst.tag === SuspenseComponent ||
             inst.tag === HostRoot
         ) {
             return inst
@@ -98,7 +102,7 @@ export function getInstanceFromNode(node: Node): Fiber | null {
     return null
 }
 
-export function getFiberCurrentPropsFromNode(node: Instance | TextInstance | SuspenseInstance):Props {
+export function getFiberCurrentPropsFromNode(node: Instance | TextInstance | SuspenseInstance): Props {
     return node[internalPropsKey] || null
 }
 
@@ -113,4 +117,20 @@ export function getEventHandlerListeners(
     scope: EventTarget | ReactScopeInstance
 ): null | Set<ReactDOMEventHandleListener> {
     return scope[internalEventHandlerListenersKey] || null
+}
+
+export function detachDeletedInstance(node: Instance) {
+    delete node[internalInstanceKey];
+    delete node[internalPropsKey];
+    delete node[internalEventHandlersKey];
+    delete node[internalEventHandlerListenersKey];
+    delete node[internalEventHandlesSetKey];
+}
+
+export function getEventListenerSet(node: EventTarget): Set<string> {
+    let elementListenerSet = node[internalEventHandlersKey]
+    if (elementListenerSet === undefined) {
+        elementListenerSet = node[internalEventHandlersKey] = new Set()
+    }
+    return elementListenerSet
 }

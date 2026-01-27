@@ -225,7 +225,7 @@ function workLoop(
     advanceTimers(currentTime) // 先推进定时器队列
     currentTask = peek(taskQueue) // 取任务队列中最高优先级的任务
     while(currentTask !== null && !(enableSchedulerDebugging && isSchedulerPaused)) {
-        console.log('-------React---任务调度-----', currentTask)
+        console.log('-------React---任务调度-----', currentTask, taskQueue)
         if (
             currentTask.expirationTime > currentTime &&  // 任务未过期
             (!hasTimeRemaining || shouldYieldToHost()) // 无剩余时间 或需要让出主线程
@@ -342,6 +342,7 @@ function unstable_scheduleCallback(
         sortIndex: -1  // 排序索引 （堆排序用）
     }
 
+    // 如果当前任务的 startTime > currentTime, 那么判定该任务为非立即执行任务放在 timerQueue 中延迟执行
     if (startTime > currentTime) {
         // 延迟任务： 加入定时器队列（按开始时间排序）
         newTask.sortIndex = startTime

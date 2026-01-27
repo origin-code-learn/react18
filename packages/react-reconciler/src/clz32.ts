@@ -1,4 +1,7 @@
 
+// 计算 32 位无符号整数中「前导零的个数」：
+// 32 的 32 位二进制表示：00000000 00000000 00000000 00100000
+// 前导零的个数是 27（前面连续 27 个 0）
 export const clz32 = Math.clz32 ? Math.clz32 : clz32Fallback
 
 const log = Math.log

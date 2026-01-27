@@ -2,25 +2,41 @@ import { Fiber, TransitionTracingCallbacks } from "react-reconciler/src/ReactInt
 
 type Key = string | number | bigint;
 
+declare function flushSync<R>(fn: () => R): R;
+declare function flushSync(): void;
+
 // TypeScript 等价定义
-type JSXElementConstructor<P> = | ((props: P, ) => ReactNode | Promise<ReactNode>) | (new(props: P, context: any) => any);
+type JSXElementConstructor<P> = | ((props: P,) => ReactNode | Promise<ReactNode>) | (new (props: P, context: any) => any);
 
 interface ReactElement<P = any, T extends string | JSXElementConstructor<any> = string | JSXElementConstructor<any>> {
-  type: T;
-  props: P;
-  key: Key | null;
+    type: T;
+    props: P;
+    key: Key | null;
 }
 
-export type ReactNode = ReactElement 
-| ReactPortal
-| ReactText
-| ReactFragment
-| ReactProvider<any>
-| ReactConsumer<any>;
+interface RefObject<T> {
+    readonly current: T | null
+}
+
+type ReactRef<T> = | null | undefined | RefObject<T> | MutableRefObject<T> | ((instance: T | null) => void)
+
+export type ReactNode = ReactElement
+    | ReactPortal
+    | ReactText
+    | ReactFragment
+    | ReactProvider<any>
+    | ReactConsumer<any>;
 
 
 export interface Wakeable {
     then(onFulfill: () => unknown, onReject: () => unknown): void | Wakeable
+}
+
+export interface Thenable<R> {
+    then<U>(
+        onFulfill: (value: R) => void | Thenable<U> | U,
+        onReject: (error: any) => void | Thenable<U> | U,
+    ): void | Thenable<U>
 }
 
 export type MutableSource<Source> = {
@@ -165,13 +181,13 @@ interface ProviderProps<T> {
     children?: ReactNode | undefined
 }
 
-interface ProviderExoticComponent<P> extends ExoticComponent<P> {}
+interface ProviderExoticComponent<P> extends ExoticComponent<P> { }
 
 type Provider<T> = ProviderExoticComponent<ProviderProps<T>>
 
-interface Context<T> extends Provider<T> {}
+interface Context<T> extends Provider<T> { }
 
-interface Component<P = {}, S = {}, SS = any> extends ComponentLifecycle<P, S, SS> {}
+interface Component<P = {}, S = {}, SS = any> extends ComponentLifecycle<P, S, SS> { }
 
 export class Component<P, S> {
     static contextType?: Context<any> | undefined;
@@ -207,4 +223,10 @@ export type ReactScopeInstance = {
     DO_NOT_USE_queryFirstNode(ReactScopeQuery): null | Object,
     containsNode(Object): boolean,
     getChildContextValues: <T>(context: ReactContext<T>) => Array<T>
+}
+
+export type OffscreenMode = 'hidden' | 'unstable-defer-without-hiding' | 'visible'
+
+export type StartTransitionOptions = {
+    name?: string
 }

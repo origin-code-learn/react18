@@ -15,7 +15,7 @@ function throwOnInvalidObjectType(returnFiber: Fiber, newChild: Object) {
     throw new Error('ChildReconciler 调合阶段出错了!')
 }
 
-function resolveLazy (lazyType) {
+function resolveLazy(lazyType) {
     const payload = lazyType._payload
     const init = lazyType._init
     return init(payload)
@@ -33,7 +33,7 @@ function ChildReconciler(shouldTrackSideEffects) {
         } else {
             deletions.push(childToDelete)
         }
-        
+
     }
 
     function mapRemainingChildren(
@@ -99,8 +99,8 @@ function ChildReconciler(shouldTrackSideEffects) {
         // 2. 若旧节点存在，检查是否可复用
         if (current !== null) {
             if (
-                current.elementType === elementType || 
-                (typeof elementType === 'object' && elementType !== null && elementType.$$typeof === REACT_LAZY_TYPE && resolveLazy(elementType) === current.type) 
+                current.elementType === elementType ||
+                (typeof elementType === 'object' && elementType !== null && elementType.$$typeof === REACT_LAZY_TYPE && resolveLazy(elementType) === current.type)
             ) {
                 const existing = useFiber(current, element.props)
                 existing.ref = coerceRef(returnFiber, current, element)
@@ -399,7 +399,7 @@ function ChildReconciler(shouldTrackSideEffects) {
         const key = element.key
         let child = currentFirstChild  // 从大儿子开始遍历
         // 遍历当前树中的字节点，寻找可复用的节点
-        while(child !== null) {
+        while (child !== null) {
             if (child.key === key) {  // 如果找到了key 匹配的节点
                 const elementType = element.type
                 if (elementType === REACT_FRAGMENT_TYPE) { // 如果新节点类型是 Fragment 类型
@@ -456,7 +456,37 @@ function ChildReconciler(shouldTrackSideEffects) {
         textContent: string,
         lanes: Lanes
     ): Fiber {
-        debugger
+        // 关键注释：文本节点无需检查 key —— 因为 React 没有为文本节点提供定义 key 的方式,（文本节点是纯字符串，无 props/key 等属性，这是与元素节点的核心区别）
+        // case1. 存在旧文本节点 Fiber，且类型是 HostText（文本节点）→ 复用并更新
+        if (currentFirstChild !== null && currentFirstChild.tag === HostText) {
+            // 步骤1：删除旧文本节点的所有兄弟节点（因为当前只需要单个文本节点）
+            // 例如：父节点原有 [文本节点, div节点]，现在只需要文本节点 → 删除 div 节点
+            deleteRemainingChildren(returnFiber, currentFirstChild.sibling)
+
+            // 步骤2：复用旧 Fiber 节点，更新其内容为新的 textContent
+            // useFiber 是复用 Fiber 的核心函数：保留旧 Fiber 的结构，仅更新 pendingProps（文本内容）
+            const existing = useFiber(currentFirstChild, textContent)
+
+            // 步骤3：设置复用后 Fiber 的父节点引用（保证 Fiber 树的层级关系）
+            existing.return = returnFiber
+
+            // 返回复用并更新后的 Fiber 节点
+            return existing
+        }
+
+        // case2：无旧文本节点，或旧节点不是 HostText 类型 → 创建新节点
+        // 例如：旧节点是 div（HostComponent），现在要替换为文本节点 → 删除旧节点，创建新文本节点
+        // 步骤1：删除所有旧的子节点（包括非文本节点的旧节点）
+        deleteRemainingChildren(returnFiber, currentFirstChild)
+
+        // 步骤2：创建新的 HostText 类型 Fiber 节点
+        // createFiberFromText：根据文本内容生成 Fiber，tag 为 HostText，pendingProps 为 textContent
+        const created = createFiberFromText(textContent, returnFiber.mode, lanes)
+
+        // 步骤3：设置新 Fiber 的父节点引用
+        created.return = returnFiber
+
+        return created
     }
 
     function deleteRemainingChildren(
@@ -467,7 +497,7 @@ function ChildReconciler(shouldTrackSideEffects) {
             return null
         }
         let childToDelete = currentFirstChild
-        while(childToDelete !== null) {
+        while (childToDelete !== null) {
             deleteChild(returnFiber, childToDelete)
             childToDelete = childToDelete.sibling
         }
@@ -490,7 +520,8 @@ function ChildReconciler(shouldTrackSideEffects) {
         // 第一阶段：按索引顺序对比新旧节点（尽可能复用同位置节点）
         for (; oldFiber !== null && newIdx < newChildren.length; newIdx++) {
             if (oldFiber.index > newIdx) {
-
+                nextOldFiber = oldFiber
+                oldFiber = null
             } else {
                 // 缓存下一个旧节点（避免后续查找）
                 nextOldFiber = oldFiber.sibling
@@ -605,8 +636,8 @@ function ChildReconciler(shouldTrackSideEffects) {
     ): Fiber | null {
         debugger
     }
-    
-    
+
+
     function reconcileChildFibers(
         returnFiber: Fiber,
         currentFirstChild: Fiber | null,
@@ -617,7 +648,7 @@ function ChildReconciler(shouldTrackSideEffects) {
         if (isUnkeyedTopLevelFragment) {
             newChild = newChild.props.children
         }
-        
+
         if (typeof newChild === 'object' && newChild !== null) {
             switch (newChild.$$typeof) {
                 case REACT_ELEMENT_TYPE:
@@ -629,7 +660,7 @@ function ChildReconciler(shouldTrackSideEffects) {
                     const init = newChild._init
                     return reconcileChildFibers(returnFiber, currentFirstChild, init(payload), lanes)
                 }
-                    
+
             }
             if (isArray(newChild)) {
                 return reconcileChildrenArray(
@@ -651,7 +682,7 @@ function ChildReconciler(shouldTrackSideEffects) {
             throwOnInvalidObjectType(returnFiber, newChild)
         }
 
-        if ((newChild === 'string' && newChild !== '') || typeof newChild === 'number') {
+        if ((typeof newChild === 'string' && newChild !== '') || typeof newChild === 'number') {
             return placeSingleChild(reconcileSingleTextNode(returnFiber, currentFirstChild, '' + newChild, lanes))
         }
 

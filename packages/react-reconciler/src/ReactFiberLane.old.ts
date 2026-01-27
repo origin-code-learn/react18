@@ -78,19 +78,30 @@ export const IdleLane: Lane = /*                        */ 0b0100000000000000000
 // 离屏任务优先级（不可见组件）
 export const OffscreenLane: Lane = /*                   */ 0b1000000000000000000000000000000; // 用于「离屏组件」（如 Offscreen 包裹的不可见组件）的更新，优先级最低，确保不可见内容的更新不影响可见部分的性能。
 
+let nextTransitionLane: Lane = TransitionLane1
+let nextRetryLane: Lane = RetryLane1;
+
+/**
+ * 通过 clz32 计算前导零个数，快速提取 Lane（或 Lanes 集合）的最高有效位索引，为后续操作（如修改过期时间、遍历 Lane）提供数组索引
+ */
 function pickArbitraryLaneIndex(lanes: Lanes) {
     return 31 - clz32(lanes)
 }
 
+/**
+ * lane 转 索引位
+*/
 function laneToIndex(lane: Lane) {
     return pickArbitraryLaneIndex(lane)
 }
 
-export function includesSomeLane (a: Lanes | Lane, b: Lanes | Lane) {
+// 判断是否包含某些车道
+export function includesSomeLane(a: Lanes | Lane, b: Lanes | Lane) {
     return (a & b) !== NoLanes
 }
 
-export function isSubsetOfLanes (set: Lanes, subset: Lanes | Lane) {
+// 判断 subset 是不是 set 的子集
+export function isSubsetOfLanes(set: Lanes, subset: Lanes | Lane) {
     return (set & subset) === subset
 }
 
@@ -107,39 +118,137 @@ export function laneToLanes(lane: Lane): Lanes {
  *          lanes & -lanes 其二进制表示为：                   0b00001000
  *  总结： 在 React 的 lanes 模型中（如前文所述），二进制位越低（右移），优先级越高
  *  该函数作用在于获取 最右侧的 1 所在的位就是其中优先级最高的 lane
- * */ 
+ * */
 export function getHighestPriorityLane(lanes: Lanes): Lane {
     return lanes & -lanes
 }
 
+// 合并车道lane
 export function mergeLanes(a: Lanes | Lane, b: Lanes | Lane): Lanes {
     return a | b
 }
 
+// 从 set 车道中移除车道 subset
 export function removeLanes(set: Lanes, subset: Lanes | Lane): Lanes {
     return set & ~subset
 }
 
+// 对两个 Lane/Lanes 执行按位与运算，返回它们的交集
 export function intersectLanes(a: Lanes | Lane, b: Lanes | Lane): Lanes {
     return a & b
 }
 
+// 比较两个单个 Lane 的优先级，返回其中更高优先级的那个（Lane 数值越小，优先级越高（低位优先））
 export function higherPriorityLane(a: Lane, b: Lane) {
     return a !== NoLane && a < b ? a : b
 }
 
+/**
+ * 判断车道（Lanes）是否包含「阻塞型车道」
+ * 根据当前根节点的模式（是否默认开启并发更新），检查传入的车道集合中是否包含「同步默认车道（SyncDefaultLanes）」，以此判定这些车道的更新是否会阻塞并发渲染（即是否需要同步执行，不能被中断 / 插队）。简单说，这个函数是 React 区分「阻塞型更新」和「可并发更新」的关键判断依据。
+ * */
 export function includesBlockingLane(root: FiberRoot, lanes: Lanes) {
+    // 分支1：默认开启并发 + 根节点启用并发更新模式 → 直接返回 false（无阻塞车道）
     if (allowConcurrentByDefault && (root.current.mode & ConcurrentUpdatesByDefaultMode) !== NoMode) return false
+    // 分支2：不满足并发条件 → 检查车道是否包含「同步默认车道」
     const SyncDefaultLanes = InputContinuousHydrationLane | InputContinuousLane | DefaultHydrationLane | DefaultLane
     return (lanes & SyncDefaultLanes) !== NoLanes
 }
 
+// 判断车道集合是否包含过期车道
 export function includesExpiredLane(root: FiberRoot, lanes: Lanes) {
     return (lanes & root.expiredLanes) !== NoLanes
 }
 
+// 判断车道是否为过渡车道
 export function isTransitionLane(lane: Lane) {
     return (lane & TransitionLanes) !== NoLanes
+}
+
+// 从车道集合中提取任意（最高优先级）车道
+export function pickArbitraryLane(lanes: Lanes): Lane {
+    return getHighestPriorityLane(lanes)
+}
+
+// 判断车道集合是否仅包含重试车道
+export function includesOnlyRetries(lanes: Lanes) {
+    return (lanes & RetryLanes) === NoLanes
+}
+
+// 筛选根节点中「挂起且就绪」的车道，标记为「已唤醒（pinged）」，触发重新调度
+export function markRootPinged(
+    root: FiberRoot,
+    pingedLanes: Lanes,
+    eventTime: number
+) {
+    // 核心逻辑拆解为两步：
+    // 1. 筛选：root.suspendedLanes & pingedLanes → 仅保留「挂起且需要唤醒」的车道
+    // 2. 合并：root.pingedLanes |= 筛选结果 → 将这些车道标记为「已唤醒」
+    root.pingedLanes |= root.suspendedLanes & pingedLanes
+}
+
+export function claimNextRetryLane(): Lane {
+    // 步骤1：获取本次要分配的重试车道（取当前 nextRetryLane 的值）
+    const lane = nextRetryLane
+    // 步骤2：左移 1 位，更新下一次要分配的车道
+    // 例如：RetryLane1(128) << 1 → RetryLane2(256)
+    nextRetryLane <<= 1
+    // 步骤3：边界检测：判断移位后的车道是否超出 RetryLanes 范围
+    // (nextRetryLane & RetryLanes) === NoLanes → 超出预定义的重试车道池
+    if ((nextRetryLane & RetryLanes) === NoLanes) {
+        // 重置为起始值，实现循环分配
+        nextRetryLane = RetryLane1
+    }
+    // 步骤4：返回本次分配的重试车道
+    return lane
+}
+
+/**
+ * claimNextTransitionLane 是 React 为 useTransition 分配「过渡专属 Lane（车道）」的核心函数，通过循环移位 + 边界重置的方式，从预定义的 TransitionLanes 集合中依次分配空闲的低优先级 Lane，保证每个过渡更新都有唯一的 Lane，且分配逻辑高效、无冲突。简单说，这个函数是「过渡 Lane 池」的「分配器」，负责为每次 startTransition 调用分配一个专属的低优先级 Lane。
+*/
+export function claimNextTransitionLane(): Lane {
+    // 步骤1：获取当前要分配的过渡 Lane（本次分配的值）
+    const lane = nextTransitionLane
+
+    // 步骤2：更新全局变量，移位准备下一个分配的 Lane
+    // 左移 1 位：二进制位向右挪一位（如 0b100000 → 0b1000000）
+    nextTransitionLane = lane << 1
+
+    // 步骤3：边界检测：若下一个 Lane 超出 TransitionLanes 范围，重置为起始值
+    // (nextTransitionLane & TransitionLanes) === NoLanes → 下一个 Lane 不在预定义的过渡车道池中
+    if ((nextTransitionLane & TransitionLanes) === NoLanes) {
+        nextTransitionLane = TransitionLane1  // 重置为第一个过渡车道，循环分配
+    }
+
+    // 步骤4：返回本次分配的 Lane
+    return lane
+}
+
+/**
+ * markRootSuspended 是 React 处理Suspense/Transition 挂起时的核心函数 —— 它的核心作用是：
+ * 1.标记 FiberRoot 根节点上指定的 Lane（车道）为「挂起状态」，清理该 Lane 对应的「已 Ping 标记」和「过期时间」，确保挂起的低优先级更新暂时不参与调度，直到被唤醒（Ping）后再恢复。简单说，这个函数是 React 实现「挂起更新暂存、调度暂停」的关键，直接支撑 Suspense 兜底渲染和 Transition 优先级降级的核心逻辑
+*/
+export function markRootSuspended(root: FiberRoot, suspendedLanes: Lanes) {
+    // 步骤1：将传入的挂起车道合并到根节点的 suspendedLanes 中
+    // |= 位或运算：保留原有挂起车道 + 新增本次挂起车道
+    root.suspendedLanes |= suspendedLanes
+
+    // 步骤2：从根节点的 pingedLanes 中移除这些挂起车道
+    // &= ~ 位与非运算：清除 pingedLanes 中与 suspendedLanes 重叠的位
+    root.pingedLanes &= ~suspendedLanes
+    const expirationTimes = root.expirationTimes
+    let lanes = suspendedLanes // 临时变量，遍历所有挂起车道
+    // 循环遍历所有挂起的 Lane（直到 lanes 变为 0）
+    while (lanes > 0) {
+        // 3.1：提取任意一个 Lane 的二进制位索引（如 0b100000 → 索引 5）
+        const index = pickArbitraryLaneIndex(lanes)
+        // 3.2 根据索引还原对应的单个 Lane（1 << index → 0b100000）
+        const lane = 1 << index
+        // 3.3：将该 Lane 对应的过期时间设为 NoTimestamp（取消超时）
+        expirationTimes[index] = NoTimestamp
+        // 3.4：从临时变量中移除该 Lane，继续遍历剩余车道
+        lanes &= ~lane
+    }
 }
 
 // 获取高优先级的任务车道
@@ -229,7 +338,7 @@ function computeExpirationTime(lane: Lane, currentTime: number) {
         case SelectiveHydrationLane:
         case IdleHydrationLane:
         case IdleLane:
-        case OffscreenLane: 
+        case OffscreenLane:
             return NoTimestamp
         default:
             return NoTimestamp
@@ -292,7 +401,7 @@ export function getNextLanes(root: FiberRoot, wipLanes: Lanes): Lanes {
         const wipLane = getHighestPriorityLane(wipLanes) // 当前任务的最高优先级
         // 若新任务优先级 <= 当前任务，或新任务是默认更新且当前是过渡更新，则不中断
         if (
-            nextLane > wipLane || 
+            nextLane > wipLane ||
             (nextLane === DefaultLane && (wipLane & TransitionLanes) !== NoLanes)
         ) {
             return wipLanes // 继续处理当前任务，不中断
@@ -303,7 +412,7 @@ export function getNextLanes(root: FiberRoot, wipLanes: Lanes): Lanes {
         allowConcurrentByDefault &&
         (root.current.mode & ConcurrentUpdatesByDefaultMode) !== NoMode
     ) {
-      // 发模式下不额外处理
+        // 发模式下不额外处理
     } else if ((nextLanes & InputContinuousLane) !== NoLanes) {
         // 同步模式下，将连续输入任务与默认任务合并（确保同一批次执行）
         nextLanes |= pendingLanes & DefaultLane
@@ -317,9 +426,9 @@ export function getNextLanes(root: FiberRoot, wipLanes: Lanes): Lanes {
         const entanglements = root.entanglements // 获取根节点上记录的“优先级关联关系表”（entanglements 是一个数组，索引对应优先级通道，值为关联的优先级集合）
         // 筛选出“当前待处理优先级（nextLanes）”与“关联优先级（entangledLanes）”的交集
         // 即：找出当前需要处理的、且存在关联关系的优先级
-        let lanes = nextLanes & entangledLanes 
+        let lanes = nextLanes & entangledLanes
         // 遍历所有“需要处理的关联优先级”（通过位运算循环提取每一个置位的优先级）
-        while(lanes > 0) {
+        while (lanes > 0) {
             // 随机选取一个优先级通道的索引（从 lanes 中提取一个非 0 的位）
             const index = pickArbitraryLaneIndex(lanes)
             const lane = 1 << index // 将索引转换为对应的优先级通道（如 index=3 对应 1<<3 = 8，即二进制 1000）
@@ -344,7 +453,7 @@ export function markStarvedLanesAsExpired(root: FiberRoot, currentTime: number) 
     const expirationTimes = root.expirationTimes // 每个通道对应的过期时间（时间戳）
 
     let lanes = pendingLanes
-    while(lanes > 0) {
+    while (lanes > 0) {
         const index = pickArbitraryLaneIndex(lanes) // 取出任意一个待处理通道的索引（二进制位操作）
         const lane = 1 << index // 将索引转换为对应的通道（单个二进制位）
         const expirationTime = expirationTimes[index]
@@ -356,7 +465,7 @@ export function markStarvedLanesAsExpired(root: FiberRoot, currentTime: number) 
                 // 为通道计算并设置过期时间
                 expirationTimes[index] = computeExpirationTime(lane, currentTime)
             }
-        } else if (expirationTime <= currentTime) {
+        } else if (expirationTime <= currentTime) { // 如果任务已过期，过期车道记录下该车道
             root.expiredLanes |= lane
         }
 
@@ -372,31 +481,39 @@ export function includesNonIdleWork(lanes: Lanes) {
 
 export const NoTimestamp = -1
 export function createLaneMap<T>(initial: T): LaneMap<T> {
-    const laneMap:LaneMap<T> = []
-    for(let i = 0; i < TotalLanes; i++) {
+    const laneMap: LaneMap<T> = []
+    for (let i = 0; i < TotalLanes; i++) {
         laneMap.push(initial)
     }
     return laneMap
 }
 
-
+// 在开启过渡追踪（enableTransitionTracing）的前提下，从传入的车道（Lane/Lanes）集合中，提取每个车道关联的 Transition 实例并返回
 export function getTransitionsForLanes(root: FiberRoot, lanes: Lane | Lanes): Array<Transition> | null {
     if (!enableTransitionTracing) {
         return null
     }
 
+    // 步骤2：初始化数组，存储提取到的 Transition 实例
     const transitionsForLanes: any = []
-    while(lanes > 0) {
+    // 步骤3：循环拆解车道集合，处理每个单个 Lane
+    while (lanes > 0) {
+        // 3.1 提取当前车道的二进制位索引（如 TransitionLane1 → 索引5）
         const index = laneToIndex(lanes)
+        // 3.2 还原为单个 Lane（1 << 索引 → 如 1<<5=32）
         const lane = 1 << index
+        // 3.3 从根节点映射表中获取该车道关联的 Transition 数组
         const transitions = root.transitionLanes[index]
+        // 3.4 若有关联实例，全部推入结果数组
         if (transitions !== null) {
             transitions.forEach(transition => {
                 transitionsForLanes.push(transition)
             })
         }
+        // 3.5 移除已处理的 Lane，继续遍历剩余车道
         lanes &= ~lane
     }
+    // 步骤4：无实例则返回 null，否则返回实例数组
     if (transitionsForLanes.length === 0) {
         return null
     }
@@ -409,7 +526,7 @@ export function getTransitionsForLanes(root: FiberRoot, lanes: Lane | Lanes): Ar
  *  1. 记录更新的优先级（updateLane），确保高优先级更新优先被处理；
  *  2. 清除与 “挂起状态” 相关的标记（如 suspendedLanes），避免旧状态干扰新更新；
  *  3. 记录更新的触发时间（eventTime），用于优先级排序和过期判断。
- * */ 
+ * */
 export function markRootUpdated(
     root: FiberRoot,
     updateLane: Lane, // 本次更新的优先级通道（Lane）
@@ -455,13 +572,46 @@ export function markRootFinished(
     const expirationTimes = root.expirationTimes
 
     let lanes = noLongerPendingLanes
-    while(lanes > 0) {
+    while (lanes > 0) {
         const index = pickArbitraryLaneIndex(lanes)
         const lane = 1 << index
         entanglements[index] = NoLanes
         eventTimes[index] = NoTimestamp
         expirationTimes[index] = NoTimestamp
 
+        lanes &= ~lane
+    }
+}
+
+/**
+ * markRootEntangled 是 React 完成「车道纠缠」的最终核心函数 —— 它的作用是：
+ * 1. 将指定的 entangledLanes（纠缠车道集合）同步标记到根节点的两个核心状态中：root.entangledLanes（根节点总纠缠车道）和 root.entanglements（车道纠缠映射表），保证每个参与纠缠的车道都能关联到完整的纠缠集合，让 React 调度器能通过任意一个纠缠车道，找到所有绑定在一起的车道。简单说，这个函数是「车道纠缠」的「最终落地逻辑」，为后续「通过单个车道找到所有关联纠缠车道」提供数据支撑。
+*/
+export function markRootEntangled(root: FiberRoot, entangledLanes: Lanes) {
+    // 步骤1：将新的纠缠车道合并到根节点总纠缠车道中
+    // root.entangledLanes |= entangledLanes → 合并后赋值给 rootEntangledLanes
+    const rootEntangledLanes = (root.entangledLanes |= entangledLanes)
+    // 步骤2：获取根节点的纠缠映射表（entanglements 数组）
+    const entanglements = root.entanglements
+    // 步骤3：遍历根节点所有已纠缠的车道（rootEntangledLanes）
+    let lanes = rootEntangledLanes
+    while (lanes) {
+        // 3.1 提取当前车道的最高有效位索引
+        const index = pickArbitraryLaneIndex(lanes)
+        // 3.2 还原为单个车道（如索引5 → 1<<5=32）
+        const lane = 1 << index
+        // 3.3 核心判断：当前车道是否需要关联新的纠缠集合
+        // 条件1：当前车道属于本次要纠缠的车道（lane & entangledLanes）
+        // 条件2：当前车道已关联的纠缠车道与本次纠缠车道有交集（entanglements[index] & entangledLanes）
+        // 只要满足一个条件，就需要更新该车道的纠缠映射
+        if (
+            (lane & entangledLanes) |
+            (entanglements[index] & entangledLanes)
+        ) {
+            // 3.4 更新映射表：将本次纠缠车道合并到该索引的映射值中
+            entanglements[index] |= entangledLanes
+        }
+        // 3.5 移除已处理的车道，继续遍历剩余车道
         lanes &= ~lane
     }
 }

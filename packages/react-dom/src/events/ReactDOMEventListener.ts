@@ -1,20 +1,20 @@
-import { 
-    ContinuousEventPriority, 
-    DefaultEventPriority, 
-    DiscreteEventPriority, 
-    getCurrentUpdatePriority, 
-    IdleEventPriority,
-    setCurrentUpdatePriority
+import {
+  ContinuousEventPriority,
+  DefaultEventPriority,
+  DiscreteEventPriority,
+  getCurrentUpdatePriority,
+  IdleEventPriority,
+  setCurrentUpdatePriority
 } from "react-reconciler/src/ReactEventPriorities";
 import { DOMEventName } from "./DOMEventNames";
 import { EventSystemFlags, IS_CAPTURE_PHASE } from "./EventSystemFlags";
 import {
-    getCurrentPriorityLevel as getCurrentSchedulerPriorityLevel,
-    IdlePriority as IdleSchedulerPriority,
-    ImmediatePriority as ImmediateSchedulerPriority,
-    LowPriority as LowSchedulerPriority,
-    NormalPriority as NormalSchedulerPriority,
-    UserBlockingPriority as UserBlockingSchedulerPriority,
+  getCurrentPriorityLevel as getCurrentSchedulerPriorityLevel,
+  IdlePriority as IdleSchedulerPriority,
+  ImmediatePriority as ImmediateSchedulerPriority,
+  LowPriority as LowSchedulerPriority,
+  NormalPriority as NormalSchedulerPriority,
+  UserBlockingPriority as UserBlockingSchedulerPriority,
 } from 'react-reconciler/src/Scheduler';
 import { AnyNativeEvent } from "./PluginModuleType";
 import ReactCurrentBatchConfig from "react/src/ReactCurrentBatchConfig";
@@ -57,7 +57,7 @@ export function findInstanceBlockingEvent(
   const nativeEventTarget = getEventTarget(nativeEvent)
   // 从目标 DOM 节点找到对应的最近的 React Fiber 实例（事件最初要触发的组件）
   let targetInst = getClosestInstanceFromNode(nativeEventTarget)
-  
+
   if (targetInst !== null) {
     // 2. 找到最近的已挂载 Fiber 节点（排除未挂载的临时节点）
     const nearestMounted = getNearestMountedFiber(targetInst)
@@ -117,9 +117,9 @@ function dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEve
   if (blockedOn === null) {
     // 调用插件事件系统分发事件（触发组件回调）
     dispatchEventForPluginEventSystem(
-      domEventName, 
-      eventSystemFlags, 
-      nativeEvent, 
+      domEventName,
+      eventSystemFlags,
+      nativeEvent,
       return_targetInst, // 事件目标对应的 Fiber 实例
       targetContainer
     )
@@ -147,9 +147,9 @@ function dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEve
 
   // 5. 处理不可重放的事件（直接分发，不指定目标实例）
   dispatchEventForPluginEventSystem(
-    domEventName, 
-    eventSystemFlags, 
-    nativeEvent, 
+    domEventName,
+    eventSystemFlags,
+    nativeEvent,
     null, // 不指定目标实例（可能因未hydration无法确定）
     targetContainer
   )
@@ -157,65 +157,63 @@ function dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEve
 
 // dispatchDiscreteEvent 是 React 事件系统中处理 “离散事件”（Discrete Event）的调度函数，主要用于在触发用户交互类事件（如点击、键盘输入）时，临时提升事件处理的优先级，确保这些高优先级事件能被优先响应，同时在处理完成后恢复原有状态，避免影响其他低优先级任务。
 function dispatchDiscreteEvent(
-    domEventName,  // 原生 DOM 事件名（如 'click'、'keydown'）
-    eventSystemFlags, // 事件系统标记（如是否为捕获阶段）
-    container,  // 事件所属的容器（如根容器）
-    nativeEvent  // 原生 DOM 事件对象
+  domEventName,  // 原生 DOM 事件名（如 'click'、'keydown'）
+  eventSystemFlags, // 事件系统标记（如是否为捕获阶段）
+  container,  // 事件所属的容器（如根容器）
+  nativeEvent  // 原生 DOM 事件对象
 ) {
-    // 1. 保存当前的更新优先级和过渡配置（用于后续恢复）
-    const previousPriority = getCurrentUpdatePriority()  // 获取当前的更新优先级
-    const prevTransition = ReactCurrentBatchConfig.transition  // 获取当前的过渡配置
-    ReactCurrentBatchConfig.transition = null;  // 临时清空过渡配置（避免离散事件被当作过渡任务）
+  // 1. 保存当前的更新优先级和过渡配置（用于后续恢复）
+  const previousPriority = getCurrentUpdatePriority()  // 获取当前的更新优先级
+  const prevTransition = ReactCurrentBatchConfig.transition  // 获取当前的过渡配置
+  ReactCurrentBatchConfig.transition = null;  // 临时清空过渡配置（避免离散事件被当作过渡任务）
 
-    try {
-      // 2. 临时将更新优先级设为“离散事件优先级”（最高优先级）
-      setCurrentUpdatePriority(DiscreteEventPriority)
-      // 3. 调度事件处理（核心逻辑，实际分发事件到对应的组件回调）
-      dispatchEvent(domEventName, eventSystemFlags, container, nativeEvent)
-    } finally {
-      // 4. 无论事件处理是否成功，恢复原有优先级和过渡配置
-      setCurrentUpdatePriority(previousPriority)
-      ReactCurrentBatchConfig.transition = prevTransition
-    }
+  try {
+    // 2. 临时将更新优先级设为“离散事件优先级”（最高优先级）
+    setCurrentUpdatePriority(DiscreteEventPriority)
+    // 3. 调度事件处理（核心逻辑，实际分发事件到对应的组件回调）
+    dispatchEvent(domEventName, eventSystemFlags, container, nativeEvent)
+  } finally {
+    // 4. 无论事件处理是否成功，恢复原有优先级和过渡配置
+    setCurrentUpdatePriority(previousPriority)
+    ReactCurrentBatchConfig.transition = prevTransition
+  }
 }
 
 function dispatchContinuousEvent(
-    domEventName,
-    eventSystemFlags,
-    container,
-    nativeEvent
+  domEventName,
+  eventSystemFlags,
+  container,
+  nativeEvent
 ) {
-    // debugger
-    return
-    // const previousPriority = getCurrentUpdatePriority()
-    // const prevTransition = ReactCurrentBatchConfig.transition
-    // ReactCurrentBatchConfig.transition = null
-    // try {
-    //   setCurrentUpdatePriority(ContinuousEventPriority)
-    //   dispatchEvent(domEventName, eventSystemFlags, container, nativeEvent)
-    // } finally {
-    //   setCurrentUpdatePriority(previousPriority)
-    //   ReactCurrentBatchConfig.transition = prevTransition
-    // }
+  const previousPriority = getCurrentUpdatePriority()
+  const prevTransition = ReactCurrentBatchConfig.transition
+  ReactCurrentBatchConfig.transition = null
+  try {
+    setCurrentUpdatePriority(ContinuousEventPriority)
+    dispatchEvent(domEventName, eventSystemFlags, container, nativeEvent)
+  } finally {
+    setCurrentUpdatePriority(previousPriority)
+    ReactCurrentBatchConfig.transition = prevTransition
+  }
 }
 
 // dispatchEvent 是 React 合成事件系统中事件分发的入口函数，根据不同的特性开关（enableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay）决定使用不同的事件分发实现，是连接原生 DOM 事件与 React 组件事件回调的 “总开关”。
 function dispatchEvent(
-    domEventName: DOMEventName,
-    eventSystemFlags: EventSystemFlags,
-    targetContainer: EventTarget,
-    nativeEvent: AnyNativeEvent
+  domEventName: DOMEventName,
+  eventSystemFlags: EventSystemFlags,
+  targetContainer: EventTarget,
+  nativeEvent: AnyNativeEvent
 ) {
-    // 1. 检查事件系统是否启用（_enabled 为全局开关）
-    if (!_enabled) {
-      return
-    }
-    // 2. 根据特性开关选择事件分发实现
-    if (enableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay) {
-      dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay(domEventName, eventSystemFlags, targetContainer, nativeEvent)
-    } else {
-      dispatchEventOriginal(domEventName, eventSystemFlags, targetContainer, nativeEvent)
-    }
+  // 1. 检查事件系统是否启用（_enabled 为全局开关）
+  if (!_enabled) {
+    return
+  }
+  // 2. 根据特性开关选择事件分发实现
+  if (enableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay) {
+    dispatchEventWithEnableCapturePhaseSelectiveHydrationWithoutDiscreteEventReplay(domEventName, eventSystemFlags, targetContainer, nativeEvent)
+  } else {
+    dispatchEventOriginal(domEventName, eventSystemFlags, targetContainer, nativeEvent)
+  }
 }
 
 function dispatchEventOriginal(
@@ -228,26 +226,26 @@ function dispatchEventOriginal(
 }
 
 
-export function createEventListenerWrapperWithPriority (
-    targetContainer: EventTarget,
-    domEventName: DOMEventName,
-    eventSystemFlags: EventSystemFlags
+export function createEventListenerWrapperWithPriority(
+  targetContainer: EventTarget,
+  domEventName: DOMEventName,
+  eventSystemFlags: EventSystemFlags
 ): Function {
-    const eventPriority = getEventPriority(domEventName)
-    let listenerWrapper
-    switch (eventPriority) {
-        case DiscreteEventPriority:
-            listenerWrapper = dispatchDiscreteEvent
-            break;
-        case ContinuousEventPriority:
-            listenerWrapper = dispatchContinuousEvent
-            break;
-        case DefaultEventPriority:
-        default:
-            listenerWrapper = dispatchEvent
-            break;
-    }
-    return listenerWrapper.bind(null, domEventName, eventSystemFlags, targetContainer)
+  const eventPriority = getEventPriority(domEventName)
+  let listenerWrapper
+  switch (eventPriority) {
+    case DiscreteEventPriority:
+      listenerWrapper = dispatchDiscreteEvent
+      break;
+    case ContinuousEventPriority:
+      listenerWrapper = dispatchContinuousEvent
+      break;
+    case DefaultEventPriority:
+    default:
+      listenerWrapper = dispatchEvent
+      break;
+  }
+  return listenerWrapper.bind(null, domEventName, eventSystemFlags, targetContainer)
 }
 
 
@@ -255,98 +253,97 @@ export function createEventListenerWrapperWithPriority (
 
 
 export function getEventPriority(domEventName: DOMEventName) {
-    switch (domEventName) {
-      case 'cancel':
-      case 'click':
-      case 'close':
-      case 'contextmenu':
-      case 'copy':
-      case 'cut':
-      case 'auxclick':
-      case 'dblclick':
-      case 'dragend':
-      case 'dragstart':
-      case 'drop':
-      case 'focusin':
-      case 'focusout':
-      case 'input':
-      case 'invalid':
-      case 'keydown':
-      case 'keypress':
-      case 'keyup':
-      case 'mousedown':
-      case 'mouseup':
-      case 'paste':
-      case 'pause':
-      case 'play':
-      case 'pointercancel':
-      case 'pointerdown':
-      case 'pointerup':
-      case 'ratechange':
-      case 'reset':
-      case 'resize':
-      case 'seeked':
-      case 'submit':
-      case 'touchcancel':
-      case 'touchend':
-      case 'touchstart':
-      case 'volumechange':
-      case 'change':
-      case 'selectionchange':
-      case 'textInput':
-      case 'compositionstart':
-      case 'compositionend':
-      case 'compositionupdate':
-      case 'beforeblur':
-      case 'afterblur':
-      case 'beforeinput':
-      case 'blur':
-      case 'fullscreenchange':
-      case 'focus':
-      case 'hashchange':
-      case 'popstate':
-      case 'select':
-      case 'selectstart':
-        return DiscreteEventPriority;
-      case 'drag':
-      case 'dragenter':
-      case 'dragexit':
-      case 'dragleave':
-      case 'dragover':
-      case 'mousemove':
-      case 'mouseout':
-      case 'mouseover':
-      case 'pointermove':
-      case 'pointerout':
-      case 'pointerover':
-      case 'scroll':
-      case 'toggle':
-      case 'touchmove':
-      case 'wheel':
-      case 'mouseenter':
-      case 'mouseleave':
-      case 'pointerenter':
-      case 'pointerleave':
-        return ContinuousEventPriority;
-      case 'message': {
-        const schedulerPriority = getCurrentSchedulerPriorityLevel();
-        switch (schedulerPriority) {
-          case ImmediateSchedulerPriority:
-            return DiscreteEventPriority;
-          case UserBlockingSchedulerPriority:
-            return ContinuousEventPriority;
-          case NormalSchedulerPriority:
-          case LowSchedulerPriority:
-            // TODO: Handle LowSchedulerPriority, somehow. Maybe the same lane as hydration.
-            return DefaultEventPriority;
-          case IdleSchedulerPriority:
-            return IdleEventPriority;
-          default:
-            return DefaultEventPriority;
-        }
+  switch (domEventName) {
+    case 'cancel':
+    case 'click':
+    case 'close':
+    case 'contextmenu':
+    case 'copy':
+    case 'cut':
+    case 'auxclick':
+    case 'dblclick':
+    case 'dragend':
+    case 'dragstart':
+    case 'drop':
+    case 'focusin':
+    case 'focusout':
+    case 'input':
+    case 'invalid':
+    case 'keydown':
+    case 'keypress':
+    case 'keyup':
+    case 'mousedown':
+    case 'mouseup':
+    case 'paste':
+    case 'pause':
+    case 'play':
+    case 'pointercancel':
+    case 'pointerdown':
+    case 'pointerup':
+    case 'ratechange':
+    case 'reset':
+    case 'resize':
+    case 'seeked':
+    case 'submit':
+    case 'touchcancel':
+    case 'touchend':
+    case 'touchstart':
+    case 'volumechange':
+    case 'change':
+    case 'selectionchange':
+    case 'textInput':
+    case 'compositionstart':
+    case 'compositionend':
+    case 'compositionupdate':
+    case 'beforeblur':
+    case 'afterblur':
+    case 'beforeinput':
+    case 'blur':
+    case 'fullscreenchange':
+    case 'focus':
+    case 'hashchange':
+    case 'popstate':
+    case 'select':
+    case 'selectstart':
+      return DiscreteEventPriority;
+    case 'drag':
+    case 'dragenter':
+    case 'dragexit':
+    case 'dragleave':
+    case 'dragover':
+    case 'mousemove':
+    case 'mouseout':
+    case 'mouseover':
+    case 'pointermove':
+    case 'pointerout':
+    case 'pointerover':
+    case 'scroll':
+    case 'toggle':
+    case 'touchmove':
+    case 'wheel':
+    case 'mouseenter':
+    case 'mouseleave':
+    case 'pointerenter':
+    case 'pointerleave':
+      return ContinuousEventPriority;
+    case 'message': {
+      const schedulerPriority = getCurrentSchedulerPriorityLevel();
+      switch (schedulerPriority) {
+        case ImmediateSchedulerPriority:
+          return DiscreteEventPriority;
+        case UserBlockingSchedulerPriority:
+          return ContinuousEventPriority;
+        case NormalSchedulerPriority:
+        case LowSchedulerPriority:
+          // TODO: Handle LowSchedulerPriority, somehow. Maybe the same lane as hydration.
+          return DefaultEventPriority;
+        case IdleSchedulerPriority:
+          return IdleEventPriority;
+        default:
+          return DefaultEventPriority;
       }
-      default:
-        return DefaultEventPriority;
     }
+    default:
+      return DefaultEventPriority;
+  }
 }
-  

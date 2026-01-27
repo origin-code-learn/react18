@@ -6,11 +6,16 @@ import type { EventSystemFlags } from "../EventSystemFlags"
 import { registerTwoPhaseEvent } from "../EventRegistry"
 import { canUseDOM } from "shared/ExecutionEnvironment"
 
+let hasSpaceKeypress = false
+
 const documentMode: any = (canUseDOM && 'documentMode' in document) ? document.documentMode : null
 const canUseCompositionEvent = canUseDOM && 'CompositionEvent' in window
 const canUseTextInputEvent = canUseDOM && 'TextEvent' in window && !documentMode
 
 const useFallbackCompositionData = canUseDOM && (!canUseCompositionEvent || (documentMode && documentMode > 8 && documentMode <= 11))
+
+const SPACEBAR_CODE = 32
+const SPACEBAR_CHAR = String.fromCharCode(SPACEBAR_CODE)
 
 function isUsingKoreanIME(nativeEvent: any) {
     return nativeEvent.local === 'ko'
@@ -64,7 +69,7 @@ function isFallbackCompositionEnd(
     domEventName: DOMEventName,
     nativeEvent: any
 ): boolean {
-    switch(domEventName) {
+    switch (domEventName) {
         case 'keyup':
             debugger
         case 'keydown':
@@ -86,7 +91,7 @@ function extractCompositionEvent(
     nativeEvent,
     nativeEventTarget
 ) {
-    
+
     let eventType
     let fallbackData
     if (canUseCompositionEvent) {
@@ -107,7 +112,7 @@ function extractCompositionEvent(
     if (listeners.length > 0) {
         debugger
     }
-    
+
 }
 
 function getNativeBeforeInputChars(
@@ -118,10 +123,17 @@ function getNativeBeforeInputChars(
         case 'compositionend':
             debugger
         case 'keypress':
-            debugger
+            const which = nativeEvent.which
+            if (which !== SPACEBAR_CODE) return null
+            hasSpaceKeypress = true
+            return SPACEBAR_CHAR
         case 'textInput':
-            debugger
-        default: 
+            const chars = nativeEvent.data
+            if (chars === SPACEBAR_CHAR && hasSpaceKeypress) {
+                return null
+            }
+            return chars
+        default:
             return null
     }
 }
@@ -137,7 +149,7 @@ function getFallbackBeforeInputChars(
         return null
     }
 
-    switch(domEventName) {
+    switch (domEventName) {
         case 'paste':
             debugger
         case 'keypress':
@@ -157,7 +169,7 @@ function extractBeforeInputEvent(
     nativeEventTarget
 ) {
     const chars = canUseTextInputEvent ? getNativeBeforeInputChars(domEventName, nativeEvent) : getFallbackBeforeInputChars(domEventName, nativeEvent)
-    
+
     if (!chars) return null
 
     const listeners = accumulateTwoPhaseListeners(targetInst, 'onBeforeInput')

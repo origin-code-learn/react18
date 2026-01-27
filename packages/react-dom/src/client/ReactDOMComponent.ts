@@ -8,20 +8,26 @@ import { setValueForStyles } from "./CSSPropertyOperations";
 import { setValueForProperty } from "./DOMPropertyOperations";
 import setInnerHTML from "./setInnerHTML";
 import setTextContent from "./setTextContent";
-import { 
-    getHostProps as ReactDOMInputGetHostProps, 
+import {
+    initWrapperState as ReactDOMInputInitWrapperState,
+    getHostProps as ReactDOMInputGetHostProps,
     updateWrapper as ReactDOMInputUpdateWrapper,
+    postMountWrapper as ReactDOMInputPostMountWrapper,
+    restoreControlledState as ReactDOMInputRestoreControlledState,
 } from "./ReactDOMInput";
 
 import {
     getHostProps as ReactDOMSelectGetHostProps,
     postUpdateWrapper as ReactDOMSelectPostUpdateWrapper,
+    restoreControlledState as ReactDOMSelectRestoreControlledState,
 } from "./ReactDOMSelect";
 
 import {
     getHostProps as ReactDOMTextareaGetHostProps,
     updateWrapper as ReactDOMTextareaUpdateWrapper,
+    restoreControlledState as ReactDOMTextareaRestoreControlledState,
 } from "./ReactDOMTextarea";
+import { track } from "./inputValueTracking";
 
 const DANGEROUSLY_SET_INNER_HTML = 'dangerouslySetInnerHTML';
 const SUPPRESS_CONTENT_EDITABLE_WARNING = 'suppressContentEditableWarning';
@@ -31,7 +37,7 @@ const CHILDREN = 'children';
 const STYLE = 'style';
 const HTML = '__html';
 
-function noop() {}
+function noop() { }
 
 export function trapClickOnNonInteractiveElement(node: HTMLElement) {
     node.onclick = noop
@@ -51,7 +57,7 @@ function getOwnerDocumentFromRootContainer(
     特殊元素行为：如 <script> 元素直接创建可能导致意外执行，<select> 的 multiple 和 size 属性需在子元素插入前设置。
     自定义元素：Web Components 可能需要通过 is 属性指定扩展类型。
     开发环境校验：如提示错误的标签大小写、未知标签等问题。
- * */ 
+ * */
 
 export function createElement(
     type: string,  // 元素类型（如 'div'、'svg'、'my-component'）
@@ -115,7 +121,7 @@ function setInitialDOMProperties(
             if (nextHtml !== null) {
                 setInnerHTML(domElement, nextHtml) // 设置元素的 innerHTML
             }
-        } else if (propKey === CHILDREN){ // 3. 处理 children（文本子节点）
+        } else if (propKey === CHILDREN) { // 3. 处理 children（文本子节点）
             if (typeof nextProp === 'string') {
                 // 特殊处理 textarea：避免空文本导致 placeholder 不显示
                 const canSetTextContent = tag !== 'textarea' || nextProp !== ''
@@ -126,7 +132,7 @@ function setInitialDOMProperties(
                 setTextContent(domElement, '' + nextProp)  // 数字转换为字符串
             }
         } else if ([SUPPRESS_CONTENT_EDITABLE_WARNING, SUPPRESS_HYDRATION_WARNING].includes(propKey)) { // 4. 忽略 suppression 相关属性（仅用于开发环境警告控制）
-            
+
         } else if (propKey === AUTOFOCUS) { //  5. 忽略 autofocus（在 commit 阶段单独处理）
 
         } else if (registrationNameDependencies.hasOwnProperty(propKey)) { // 6. 处理事件属性（如 onClick、onScroll）
@@ -195,7 +201,10 @@ export function setInitialProperties(
             break
         }
         case 'input': {
-            debugger
+            ReactDOMInputInitWrapperState(domElement, rawProps)
+            props = ReactDOMInputGetHostProps(domElement, rawProps)
+            listenToNonDelegatedEvent('invalid', domElement)
+            break
         }
         case 'option': {
             debugger
@@ -214,9 +223,11 @@ export function setInitialProperties(
     assertValidProps(tag, props)
     setInitialDOMProperties(tag, domElement, rootContainerElement, props, isCustomComponentTag)
 
-    switch(tag) {
+    switch (tag) {
         case 'input': {
-            debugger
+            track(domElement as any)
+            ReactDOMInputPostMountWrapper(domElement, rawProps, false)
+            break
         }
         case 'textarea': {
             debugger
@@ -269,7 +280,7 @@ export function diffProperties(
             lastProps = lastRawProps
             nextProps = nextRawProps
             if (
-                typeof (lastProps as any).onClick !== 'function' && 
+                typeof (lastProps as any).onClick !== 'function' &&
                 typeof (nextProps as any).onClick === 'function'
             ) {
                 trapClickOnNonInteractiveElement(domElement as any)
@@ -322,7 +333,7 @@ export function diffProperties(
         const nextProp = nextProps[propKey]
         const lastProp = lastProps != null ? lastProps[propKey] : undefined
         if (
-            !nextProps.hasOwnProperty(propKey) || 
+            !nextProps.hasOwnProperty(propKey) ||
             nextProp === lastProp ||
             (nextProp === null && lastProp === null)
         ) {
@@ -358,7 +369,7 @@ export function diffProperties(
         } else if (propKey === DANGEROUSLY_SET_INNER_HTML) {
             const nextHtml = nextProp ? nextProp[HTML] : undefined
             const lastHtml = lastProp ? lastProp[HTML] : undefined
-            if (nextHtml != null) { 
+            if (nextHtml != null) {
                 if (lastHtml !== nextHtml) {
                     (updatePayload = updatePayload || []).push(propKey, nextHtml)
                 }
@@ -394,7 +405,7 @@ export function diffProperties(
     return updatePayload
 }
 
-function updateDOMProperties (
+function updateDOMProperties(
     domElement: Element,
     updatePayload: Array<any>,
     wasCustomComponentTag: boolean,
@@ -434,7 +445,7 @@ export function updateProperties(
     updateDOMProperties(domElement, updatePayload, wasCustomComponentTag, isCustomComponentTag)
 
     switch (tag) {
-        case 'input': 
+        case 'input':
             ReactDOMInputUpdateWrapper(domElement, nextRawProps)
             break
         case 'textarea':
@@ -443,5 +454,27 @@ export function updateProperties(
         case 'select':
             ReactDOMSelectPostUpdateWrapper(domElement, nextRawProps)
             break
+    }
+}
+
+export function createTextNode(text: string, rootContainerInstance: Element | Document | DocumentFragment) {
+    return getOwnerDocumentFromRootContainer(rootContainerInstance).createTextNode(text)
+}
+
+export function restoreControlledState(
+    domElement: Element,
+    tag: string,
+    props: Object
+): void {
+    switch (tag) {
+        case 'input':
+            ReactDOMInputRestoreControlledState(domElement, props)
+            return
+        case 'textarea':
+            ReactDOMTextareaRestoreControlledState(domElement, props)
+            return
+        case 'select':
+            ReactDOMSelectRestoreControlledState(domElement, props)
+            return
     }
 }

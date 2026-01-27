@@ -1,52 +1,24 @@
-import { useState, useEffect } from 'react'
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  useReducer,
+} from 'react'
+
 import { createRoot } from 'react-dom/client'
 
-function Child() {
-  useEffect(() => {
-    console.log('-----Child useEffect-------')
-    return () => {
-      console.log('-----child 组件Effect 清除-------')
-    }
-  }, [])
-  return (<div>我是 child 组件</div>)
-}
+import HookDemo from './Hook'
+import CompDemo from './Comp'
+import ApiDemo from './Api'
 
-function Child2() {
-  useEffect(() => {
-    console.log('-----Child2 useEffect-------')
-    return () => {
-      console.log('-----child2 组件Effect 清除-------')
-    }
-  }, [])
-  return (<div>我是 child2 组件</div>)
-}
 
-let number = 0
-function App ({}) {
-  const [number, setNumber] = useState(0);
-  // const number = 0
-  const onChange = () => {
-    console.log('----- +5 -----')
-    setNumber(number + 5);
-    // number++
-  }
-  console.log('-----rerender-------', number)
-  useEffect(() => {
-    console.log('-----useEffect-------', number)
-    return () => {
-      console.log('-----App 组件Effect 清除-------')
-    }
-  }, [])
-
-  return (
-    <div>
-      <h1 style={{ color: 'red' }}>{number}</h1>
-      <div>hello, react</div>
-      <button onClick={onChange}>+5</button>
-      <Child />
-      <Child2 />
-    </div>
-  )
+function App() {
+  return (<ApiDemo />)
 }
 
 const options = {

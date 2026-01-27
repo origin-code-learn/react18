@@ -1,16 +1,37 @@
-import { appendChildToContainer, clearContainer, Container, insertInContainerBefore, Instance, prepareForCommit, resetTextContent, supportsHydration, supportsMutation, supportsPersistence, UpdatePayload } from "ReactDOMHostConfig";
 import { Fiber, FiberRoot } from "./ReactInternalTypes";
 import { Lanes } from "./ReactFiberLane.old";
-import { deletedTreeCleanUpLevel, enableCache, enableCreateEventHandleAPI, enableProfilerCommitHooks, enableProfilerTimer, enableSuspenseLayoutEffectSemantics, enableTransitionTracing } from "shared/ReactFeatureFlags";
-import { BeforeMutationMask, ChildDeletion, ContentReset, Hydrating, LayoutMask, MutationMask, NoFlags, Passive, PassiveMask, Placement, Ref, Snapshot, Update } from "./ReactFiberFlags";
+import { deletedTreeCleanUpLevel, enableCache, enableCreateEventHandleAPI, enableProfilerCommitHooks, enableProfilerTimer, enableSchedulingProfiler, enableScopeAPI, enableSuspenseCallback, enableSuspenseLayoutEffectSemantics, enableTransitionTracing } from "shared/ReactFeatureFlags";
+import { BeforeMutationMask, ChildDeletion, ContentReset, Hydrating, LayoutMask, MutationMask, NoFlags, Passive, PassiveMask, Placement, Ref, Snapshot, Update, Visibility } from "./ReactFiberFlags";
 import { CacheComponent, ClassComponent, DehydratedFragment, ForwardRef, FunctionComponent, HostComponent, HostPortal, HostRoot, HostText, IncompleteClassComponent, LegacyHiddenComponent, MemoComponent, OffscreenComponent, Profiler, ScopeComponent, SimpleMemoComponent, SuspenseComponent, SuspenseListComponent, TracingMarkerComponent } from "./ReactWorkTags";
 import { resolveDefaultProps } from "./ReactFiberLazyComponent.old";
-import { captureCommitPhaseError } from "./ReactFiberWorkLoop.old";
+import { captureCommitPhaseError, markCommitTimeOfFallback, resolveRetryWakeable } from "./ReactFiberWorkLoop.old";
 import { ConcurrentMode, NoMode, ProfileMode } from "./ReactTypeOfMode";
 import {
-    commitUpdate
+    commitUpdate,
+    appendChildToContainer,
+    clearContainer,
+    Container,
+    insertInContainerBefore,
+    Instance,
+    prepareForCommit,
+    removeChild,
+    removeChildFromContainer,
+    resetTextContent,
+    supportsHydration,
+    supportsMutation,
+    supportsPersistence,
+    TextInstance,
+    UpdatePayload,
+    insertBefore,
+    appendChild,
+    detachDeletedInstance,
+    getPublicInstance,
+    hideInstance,
+    unhideInstance,
+    hideTextInstance,
+    unhideTextInstance
 } from './ReactFiberHostConfig';
-import { 
+import {
     NoFlags as NoHookEffect,
     HasEffect as HookHasEffect,
     Layout as HookLayout,
@@ -18,18 +39,28 @@ import {
     Passive as HookPassive,
     type HookFlags,
 } from "./ReactHookEffectTags";
-import { Transition } from "shared/ReactTypes";
+import { Transition, Wakeable } from "shared/ReactTypes";
 import { FunctionComponentUpdateQueue } from "./ReactFiberHooks.old";
+import { OffscreenInstance, OffscreenState } from "./ReactFiberOffscreenComponent";
+import { SuspenseState } from "./ReactFiberSuspenseComponent.old";
 
 
 let focusedInstanceHandle: null | Fiber = null;
 let shouldFireAfterActiveInstanceBlur: boolean = false;
+// 标记当前 Fiber 子树是否是 “隐藏的离屏组件”（OffscreenComponent）
 let offscreenSubtreeWasHidden: boolean = false;
+let offscreenSubtreeIsHidden: boolean = false;
 
 let inProgressLanes: Lanes | null = null
 let inProgressRoot: FiberRoot | null = null
 
+let hostParent: Instance | Container | null = null;
+let hostParentIsContainer: boolean = false;
+
 let nextEffect: Fiber | null = null;
+
+const PossiblyWeakSet = typeof WeakSet === 'function' ? WeakSet : Set
+
 export function commitBeforeMutationEffects(
     root: FiberRoot,
     firstChild: Fiber
@@ -53,7 +84,7 @@ export function commitBeforeMutationEffects(
      * 4. 处理焦点模糊相关的触发标记
      * shouldFireAfterActiveInstanceBlur 是一个全局标记，用于判断是否需要在提交阶段后触发焦点模糊（blur）相关事件
      * 此处将标记值保存到 shouldFire 并重置标记，最终通过返回值告知调用者是否需要触发这些事件
-     * */ 
+     * */
     const shouldFire = shouldFireAfterActiveInstanceBlur
     shouldFireAfterActiveInstanceBlur = false
     // 5. 重置焦点实例句柄，避免残留值影响后续流程
@@ -102,7 +133,7 @@ export function commitBeforeMutationEffects_begin() {
 */
 function commitBeforeMutationEffects_complete() {
     // 循环处理当前节点及回溯路径上的节点
-    while(nextEffect !== null) {
+    while (nextEffect !== null) {
         const fiber = nextEffect
         try {
             // 处理当前 Fiber 节点自身的 Before Mutation 阶段副作用
@@ -193,6 +224,109 @@ export function commitLayoutEffects(
     inProgressRoot = null
 }
 
+function reappearLayoutEffects_begin(subtreeRoot: Fiber) {
+    while (nextEffect !== null) {
+        const fiber = nextEffect
+        const firstChild = fiber.child
+        if (fiber.tag === OffscreenComponent) {
+            const isHidden = fiber.memoizedState !== null
+            if (isHidden) {
+                reappearLayoutEffects_complete(subtreeRoot)
+                continue
+            }
+        }
+
+        if (firstChild !== null) {
+            firstChild.return = fiber
+            nextEffect = firstChild
+        } else {
+            reappearLayoutEffects_complete(subtreeRoot)
+        }
+    }
+}
+
+function safelyAttachRef(
+    current: Fiber,
+    nearestMountedAncestor: Fiber | null
+) {
+    try {
+        commitAttachRef(current)
+    } catch (error) {
+        captureCommitPhaseError(current, nearestMountedAncestor, error)
+    }
+}
+
+function safelyCallCommitHookLayoutEffectListMount(
+    current: Fiber,
+    nearestMountedAncestor: Fiber | null
+) {
+    try {
+        commitHookEffectListMount(HookLayout, current)
+    } catch (error) {
+        captureCommitPhaseError(current, nearestMountedAncestor, error)
+    }
+}
+
+function safelyCallComponentDidMount(
+    current: Fiber,
+    nearestMountedAncestor: Fiber | null,
+    instance: any
+) {
+    try {
+        instance.componentDidMount()
+    } catch (error) {
+        captureCommitPhaseError(current, nearestMountedAncestor, error)
+    }
+}
+
+function reappearLayoutEffectsOnFiber(node: Fiber) {
+    switch (node.tag) {
+        case FunctionComponent:
+        case ForwardRef:
+        case SimpleMemoComponent: {
+            safelyCallCommitHookLayoutEffectListMount(node, node.return)
+            break
+        }
+        case ClassComponent: {
+            const instance = node.stateNode
+            if (typeof instance.componentDidMount === 'function') {
+                safelyCallComponentDidMount(node, node.return, instance)
+            }
+            safelyAttachRef(node, node.return)
+            break
+        }
+        case HostComponent: {
+            safelyAttachRef(node, node.return)
+            break
+        }
+    }
+}
+
+function reappearLayoutEffects_complete(subtreeRoot: Fiber) {
+    while (nextEffect !== null) {
+        const fiber = nextEffect
+        try {
+            reappearLayoutEffectsOnFiber(fiber)
+        } catch (error) {
+            captureCommitPhaseError(fiber, fiber.return, error)
+        }
+
+        if (fiber === subtreeRoot) {
+            nextEffect = null
+            return
+        }
+
+        const sibling = fiber.sibling
+        if (sibling !== null) {
+            sibling.return = fiber.return
+            nextEffect = sibling
+            return
+        }
+
+        nextEffect = fiber.return
+    }
+}
+
 /**
  * commitLayoutEffects_begin 是 React 提交阶段（commit phase）中 Layout 阶段的核心遍历函数，负责递归遍历 Fiber 树，触发布局相关的副作用（如 useLayoutEffect 回调、componentDidMount/componentDidUpdate 生命周期方法等）。它与 commitLayoutMountEffects_complete 配合，实现 Layout 阶段的深度优先遍历，确保所有布局副作用按正确顺序执行。
  * 核心背景：Layout 阶段的作用
@@ -221,7 +355,39 @@ function commitLayoutEffects_begin(
             fiber.tag === OffscreenComponent &&    // 当前节点是 Offscreen 组件
             isModernRoot
         ) {
-            debugger
+            const isHidden = fiber.memoizedState !== null
+            const newOffscreenSubtreeIsHidden = isHidden || offscreenSubtreeIsHidden
+            if (newOffscreenSubtreeIsHidden) {
+                commitLayoutMountEffects_complete(subtreeRoot, root, committedLanes)
+                continue
+            } else {
+                const current = fiber.alternate
+                const wasHidden = current !== null && current.memoizedState !== null
+                const newOffscreenSubtreeWasHidden = wasHidden || offscreenSubtreeWasHidden
+                const prevOffscreenSubtreeIsHidden = offscreenSubtreeIsHidden
+                const prevOffscreenSubtreeWasHidden = offscreenSubtreeWasHidden
+
+                offscreenSubtreeIsHidden = newOffscreenSubtreeIsHidden;
+                offscreenSubtreeWasHidden = newOffscreenSubtreeWasHidden;
+
+                if (offscreenSubtreeWasHidden && !prevOffscreenSubtreeWasHidden) {
+                    nextEffect = fiber
+                    reappearLayoutEffects_begin(fiber)
+                }
+
+                let child = firstChild
+                while (child !== null) {
+                    nextEffect = child
+                    commitLayoutEffects_begin(child, root, committedLanes)
+                    child = child.sibling
+                }
+
+                nextEffect = fiber
+                offscreenSubtreeIsHidden = prevOffscreenSubtreeIsHidden
+                offscreenSubtreeWasHidden = prevOffscreenSubtreeWasHidden
+                commitLayoutMountEffects_complete(subtreeRoot, root, committedLanes)
+                continue
+            }
         }
 
         // 常规节点处理：检查子树是否包含 Layout 阶段的副作用
@@ -239,6 +405,20 @@ function commitLayoutEffects_begin(
     }
 }
 
+/**
+ * commitSuspenseHydrationCallbacks 是 React18 中服务端渲染（SSR）水化（Hydration）完成后 的回调处理函数 —— 它的核心作用是：
+ * 1.在 Suspense 组件完成水化并进入提交阶段时，触发水化完成的收尾操作（调用 commitHydratedSuspenseInstance），并在启用 Suspense 回调特性时执行 onHydrated 回调，通知外部「Suspense 组件已完成水化」。简单说，这个函数是 SSR 场景下 Suspense 水化收尾的「回调触发器」，专门处理水化完成后的副作用和外部通知逻辑
+*/
+function commitSuspenseHydrationCallbacks(
+    finishedRoot: FiberRoot,
+    finishedWork: Fiber
+) {
+    if (!supportsHydration) {
+        return;
+    }
+    debugger
+}
+
 function commitLayoutEffectOnFiber(
     finishedRoot: FiberRoot,
     current: Fiber | null,
@@ -250,7 +430,11 @@ function commitLayoutEffectOnFiber(
             case FunctionComponent:
             case ForwardRef:
             case SimpleMemoComponent: {
-                debugger
+                if (finishedWork.type.render) {
+                    console.log('-------finishedWork.type.render---------')
+                }
+                commitHookEffectListMount(HookLayout | HookHasEffect, finishedWork)
+                break
             }
             case ClassComponent: {
                 debugger
@@ -275,7 +459,8 @@ function commitLayoutEffectOnFiber(
                 debugger
             }
             case SuspenseComponent: {
-                debugger
+                commitSuspenseHydrationCallbacks(finishedRoot, finishedWork)
+                break
             }
             case SuspenseListComponent:
             case IncompleteClassComponent:
@@ -290,9 +475,21 @@ function commitLayoutEffectOnFiber(
             }
         }
     }
-    
+
+    // 补充执行 ref 赋值（边缘场景）
+    // 条件：禁用 Suspense 布局语义 或 非隐藏的离屏组件
     if (!enableSuspenseLayoutEffectSemantics || !offscreenSubtreeWasHidden) {
-        debugger
+        if (enableScopeAPI) {
+            // ScopeAPI 开启时：非 ScopeComponent 且有 Ref 标记 → 执行 ref 赋值
+            if (finishedWork.flags & Ref && finishedWork.tag !== ScopeComponent) {
+                commitAttachRef(finishedWork); // 核心：赋值 ref.current = DOM 节点
+            }
+        } else {
+            // 常规场景：有 Ref 标记 → 执行 ref 赋值
+            if (finishedWork.flags & Ref) {
+                commitAttachRef(finishedWork)
+            }
+        }
     }
 }
 
@@ -326,7 +523,7 @@ function commitLayoutMountEffects_complete(
         // 2. 检查是否到达当前子树的根节点（遍历边界）
         if (fiber === subtreeRoot) {
             nextEffect = null // 清空遍历指针，结束当前子树的遍历
-            return 
+            return
         }
 
         // 3. 切换到兄弟节点（横向遍历）
@@ -342,7 +539,149 @@ function commitLayoutMountEffects_complete(
     }
 }
 
-function safelyDetachRef(current: Fiber, nearestMountedAncestor: Fiber | null) {
+// 安全解绑 Fiber 节点 ref 引用的核心函数（safelyDetachRef），主要作用是在组件卸载 / 删除时，规范地清空 ref 引用（包括函数式 ref 和对象式 ref），同时处理异常、性能埋点和开发环境校验，避免内存泄漏或执行错误。
+function safelyDetachRef(
+    current: Fiber, // 要解绑 ref 的 Fiber 节点（当前正在卸载/删除的节点）
+    nearestMountedAncestor: Fiber | null // 最近的已挂载祖先节点（用于错误捕获时定位）
+) {
+    // 1. 获取当前 Fiber 节点的 ref 属性（可能是函数式/对象式 ref，或 null）
+    const ref = current.ref
+    if (ref !== null) { // 只有 ref 存在时才处理
+        if (typeof ref === 'function') {
+            let retVal
+            try {
+                if (enableProfilerTimer && enableProfilerCommitHooks && current.mode & ProfileMode) {
+                    try {
+                        retVal = ref(null) // 核心：调用函数式 ref，传入 null 解绑
+                    } finally {
+
+                    }
+                } else {
+                    // 非 Profiler 模式：直接调用函数式 ref，传入 null 解绑
+                    retVal = ref(null)
+                }
+            } catch (error) {
+                captureCommitPhaseError(current, nearestMountedAncestor, error)
+            }
+        } else {
+            // 3. 处理「对象式 ref」（如 useRef 创建的 ref）
+            ref.current = null  // 核心：清空 ref.current，解绑引用
+        }
+    }
+}
+
+function commitSuspenseCallback(finishedWork: Fiber) {
+    const newState: SuspenseState | null = finishedWork.memoizedState
+    if (enableSuspenseCallback && newState !== null) {
+        const suspenseCallback = finishedWork.memoizedProps.suspenseCallback
+        if (typeof suspenseCallback === 'function') {
+            const wakeables: Set<Wakeable> | null = finishedWork.updateQueue as any
+            if (wakeables !== null) {
+                suspenseCallback(new Set(wakeables))
+            }
+        }
+    }
+}
+
+function attachSuspenseRetryListeners(finishedWork: Fiber) {
+    const wakeables: Set<Wakeable> | null = finishedWork.updateQueue as any
+    if (wakeables !== null) {
+        finishedWork.updateQueue = null
+        let retryCache = finishedWork.stateNode
+        if (retryCache === null) {
+            retryCache = finishedWork.stateNode = new (PossiblyWeakSet as any)()
+        }
+        wakeables.forEach(wakeable => {
+            const retry = resolveRetryWakeable.bind(null, finishedWork, wakeable)
+            if (!retryCache.has(wakeable)) {
+                retryCache.add(wakeable)
+                wakeable.then(retry, retry)
+            }
+        })
+    }
+}
+
+/**
+ * hideOrUnhideAllChildren 是 React18 中提交阶段（Commit Phase） 控制 DOM 节点显示 / 隐藏的核心函数 —— 它的核心作用是：
+ * 1. 遍历指定 Fiber 节点的所有子节点，仅对「最顶层的宿主节点（HostComponent/HostText）」执行隐藏 / 显示操作（非递归到所有子节点），同时跳过嵌套的 Offscreen/LegacyHidden 组件，保证 DOM 操作的最小粒度和嵌套逻辑的正确性。
+ * 简单说，这个函数是 React 实现 Offscreen/Suspense 「离屏隐藏」「懒加载」等特性的底层 DOM 操作入口，专门处理 Fiber 子树的批量显隐控制。
+*/
+function hideOrUnhideAllChildren(finishedWork, isHidden) {
+    // 注释核心：仅隐藏/显示「最顶层」的宿主节点（避免递归到所有子节点）
+    let hostSubtreeRoot: any = null  // 标记当前子树的最顶层宿主节点
+    if (supportsMutation) {  // 仅在支持 DOM 变更的环境执行（浏览器）
+        // 遍历逻辑：从 finishedWork 开始，深度优先遍历所有子/兄弟 Fiber 节点
+        let node: Fiber = finishedWork
+        while (true) {
+            // 分支1：当前节点是 HostComponent（DOM 元素）
+            if (node.tag === HostComponent) {
+                if (hostSubtreeRoot === null) { // 仅处理最顶层宿主节点
+                    hostSubtreeRoot = node // 标记为当前子树根节点
+                    try {
+                        const instance = node.stateNode // 获取真实 DOM 实例
+                        if (isHidden) {
+                            hideInstance(instance) // 隐藏：如设置 display: none
+                        } else {
+                            unhideInstance(node.stateNode, node.memoizedProps) // 显示：恢复原样式
+                        }
+                    } catch (error) {
+                        // 捕获提交阶段错误，交给错误边界处理
+                        captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                    }
+                }
+                // 分支2：当前节点是 HostText（文本节点）
+            } else if (node.tag === HostText) {
+                if (hostSubtreeRoot === null) { // 仅处理最顶层文本节点
+                    try {
+                        const instance = node.stateNode // 获取真实文本节点
+                        if (isHidden) {
+                            hideTextInstance(instance) // 隐藏文本节点
+                        } else {
+                            unhideTextInstance(instance, node.memoizedProps) // 显示文本节点
+                        }
+                    } catch (error) {
+                        captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                    }
+                }
+                // 分支3：遇到嵌套的 Offscreen/LegacyHidden 组件
+            } else if (
+                (node.tag === OffscreenComponent || node.tag === LegacyHiddenComponent) &&
+                node.memoizedState !== null && node !== finishedWork
+            ) {
+                // 分支4：有子节点 → 递归进入子节点
+            } else if (node.child !== null) {
+                node.child.return = node  // 修正 Fiber 父子引用（防止引用错乱）
+                node = node.child
+                continue // 继续遍历子节点
+            }
+
+            // ==== 遍历终止/回溯逻辑 ====
+            // 1. 回到起始节点 → 遍历结束
+            if (node === finishedWork) {
+                return
+            }
+            // 2. 无兄弟节点 → 回溯到父节点
+            while (node.sibling === null) {
+                if (node.return === null || node.return === finishedWork) {
+                    return // 父节点为空/回到起始节点 → 遍历结束
+                }
+                // 回溯时重置 hostSubtreeRoot（进入新的兄弟子树）
+                if (hostSubtreeRoot === node) {
+                    hostSubtreeRoot = null
+                }
+                node = node.return
+            }
+            // 3. 有兄弟节点 → 重置 hostSubtreeRoot 并遍历兄弟节点
+            if (hostSubtreeRoot === node) {
+                hostSubtreeRoot = null
+            }
+            node.sibling.return = node.return // 修正兄弟节点的父引用
+            node = node.sibling
+        }
+    }
+}
+
+function disappearLayoutEffects_begin(subtreeRoot: Fiber) {
     debugger
 }
 
@@ -361,7 +700,18 @@ export function commitMutationEffectsOnFiber(
             recursivelyTraverseMutationEffects(root, finishedWork, lanes)
             commitReconciliationEffects(finishedWork)
             if (flags & Update) {
-                debugger
+                try {
+                    commitHookEffectListUnmount(HookInsertion | HookHasEffect, finishedWork, finishedWork.return)
+                    commitHookEffectListMount(HookInsertion | HookHasEffect, finishedWork)
+                } catch (error) {
+                    captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                }
+
+                try {
+                    commitHookEffectListUnmount(HookLayout | HookHasEffect, finishedWork, finishedWork.return)
+                } catch (error) {
+                    captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                }
             }
             return
         }
@@ -422,13 +772,86 @@ export function commitMutationEffectsOnFiber(
             return
         }
         case HostPortal: {
-            debugger
+            recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+            commitReconciliationEffects(finishedWork)
+            if (flags & Update) {
+                if (supportsPersistence) {
+                    const portal = finishedWork.stateNode
+                    const containerInfo = portal.containerInfo
+                    const pendingChildren = portal.pendingChildren
+                    try {
+                        debugger
+                        // replaceContainerChildren(containerInfo, pendingChildren)
+                    } catch (error) {
+                        captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                    }
+                }
+            }
         }
         case SuspenseComponent: {
-            debugger
+            recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+            commitReconciliationEffects(finishedWork)
+
+            const offscreenFiber: Fiber = finishedWork.child as any
+            if (offscreenFiber.flags & Visibility) {
+                const offscreenInstance: OffscreenInstance = offscreenFiber.stateNode
+                const newState: OffscreenState | null = offscreenFiber.memoizedState
+                const isHidden = newState !== null
+                offscreenInstance.isHidden = isHidden
+                if (isHidden) {
+                    const wasHidden = offscreenFiber.alternate !== null && offscreenFiber.alternate.memoizedState !== null
+                    if (!wasHidden) {
+                        markCommitTimeOfFallback()
+                    }
+                }
+            }
+            if (flags & Update) {
+                try {
+                    commitSuspenseCallback(finishedWork)
+                } catch (error) {
+                    captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                }
+                attachSuspenseRetryListeners(finishedWork)
+            }
+            return
         }
         case OffscreenComponent: {
-            debugger
+            const wasHidden = current !== null && current.memoizedState !== null
+            if (enableSuspenseLayoutEffectSemantics && finishedWork.mode & ConcurrentMode) {
+                const prevOffscreenSubtreeWasHidden = offscreenSubtreeWasHidden
+                offscreenSubtreeWasHidden = prevOffscreenSubtreeWasHidden || wasHidden
+                recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+                offscreenSubtreeWasHidden = prevOffscreenSubtreeWasHidden
+            } else {
+                recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+            }
+            commitReconciliationEffects(finishedWork)
+            if (flags & Visibility) {
+                const offscreenInstance: OffscreenInstance = finishedWork.stateNode
+                const newState: OffscreenState | null = finishedWork.memoizedState
+                const isHidden = newState !== null
+                const offscreenBoundary: Fiber = finishedWork
+                offscreenInstance.isHidden = isHidden
+                if (enableSuspenseLayoutEffectSemantics) {
+                    if (isHidden) {
+                        if (!wasHidden) {
+                            if ((offscreenBoundary.mode & ConcurrentMode) !== NoMode) {
+                                nextEffect = offscreenBoundary
+                                let offscreenChild = offscreenBoundary.child
+                                while (offscreenChild !== null) {
+                                    nextEffect = offscreenChild
+                                    disappearLayoutEffects_begin(offscreenChild)
+                                    offscreenChild = offscreenChild.sibling
+                                }
+                            }
+                        }
+                    }
+                }
+                if (supportsMutation) {
+                    hideOrUnhideAllChildren(offscreenBoundary, isHidden)
+                }
+            }
+            return
         }
         case SuspenseListComponent: {
             debugger
@@ -437,9 +860,175 @@ export function commitMutationEffectsOnFiber(
             debugger
         }
         default: {
-            debugger
+            recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+            commitReconciliationEffects(finishedWork)
+            return
         }
     }
+}
+
+function recursivelyTraverseDeletionEffects(
+    finishedWork: FiberRoot,
+    nearestMountedAncestor: Fiber,
+    parent: Fiber
+) {
+    let child = parent.child
+    while (child !== null) {
+        commitDeletionEffectsOnFiber(finishedWork, nearestMountedAncestor, child)
+        child = child.sibling
+    }
+}
+
+function commitDeletionEffectsOnFiber(
+    finishedWork: FiberRoot,
+    nearestMountedAncestor: Fiber,
+    deletedFiber: Fiber
+) {
+    switch (deletedFiber.tag) {
+        case HostComponent: {
+            if (!offscreenSubtreeWasHidden) {
+                safelyDetachRef(deletedFiber, nearestMountedAncestor)
+            }
+        }
+        case HostText: {
+            if (supportsMutation) {
+                const prevHostParent = hostParent
+                const prevHostParentIsContainer = hostParentIsContainer
+                hostParent = null
+                recursivelyTraverseDeletionEffects(finishedWork, nearestMountedAncestor, deletedFiber)
+                hostParent = prevHostParent
+                hostParentIsContainer = prevHostParentIsContainer
+                if (hostParent !== null) {
+                    if (hostParentIsContainer) {
+                        removeChildFromContainer(hostParent as Container, deletedFiber.stateNode as Instance | TextInstance)
+                    } else {
+                        console.log('-------removeChild-------')
+                        removeChild(hostParent as Instance, deletedFiber.stateNode as Instance | TextInstance)
+                    }
+                }
+            } else {
+                recursivelyTraverseDeletionEffects(finishedWork, nearestMountedAncestor, deletedFiber)
+            }
+            return
+        }
+        case DehydratedFragment: {
+            debugger
+        }
+        case HostPortal: {
+            debugger
+        }
+        case FunctionComponent:
+        case ForwardRef:
+        case MemoComponent:
+        case SimpleMemoComponent: {
+            if (!offscreenSubtreeWasHidden) {
+                const updateQueue: FunctionComponentUpdateQueue | null = deletedFiber.updateQueue as any
+                if (updateQueue !== null) {
+                    const lastEffect = updateQueue.lastEffect
+                    if (lastEffect !== null) {
+                        const firstEffect = lastEffect.next
+                        let effect = firstEffect
+                        do {
+                            const { destroy, tag } = effect
+                            if (destroy !== undefined) {
+                                if ((tag & HookInsertion) !== NoHookEffect) {
+                                    safelyCallDestroy(deletedFiber, nearestMountedAncestor, destroy)
+                                } else if ((tag & HookLayout) !== NoHookEffect) {
+                                    if (enableSchedulingProfiler) {
+                                        debugger
+                                    }
+
+                                    if (enableProfilerTimer && enableProfilerCommitHooks && deletedFiber.mode & ProfileMode) {
+                                        safelyCallDestroy(deletedFiber, nearestMountedAncestor, destroy)
+                                    } else {
+                                        safelyCallDestroy(deletedFiber, nearestMountedAncestor, destroy)
+                                    }
+
+                                    if (enableSchedulingProfiler) {
+                                        debugger
+                                    }
+                                }
+                            }
+                            effect = effect.next
+                        } while (effect !== firstEffect)
+                    }
+                }
+            }
+
+            recursivelyTraverseDeletionEffects(finishedWork, nearestMountedAncestor, deletedFiber)
+            return
+        }
+        case ClassComponent: {
+            debugger
+        }
+        case ScopeComponent: {
+            debugger
+        }
+        case OffscreenComponent: {
+            debugger
+        }
+        default: {
+            recursivelyTraverseDeletionEffects(finishedWork, nearestMountedAncestor, deletedFiber)
+            return
+        }
+    }
+}
+
+function detachFiberMutation(
+    fiber: Fiber
+) {
+    const alternate = fiber.alternate
+    if (alternate !== null) {
+        alternate.return = null
+    }
+    fiber.return = null
+}
+
+function commitDeletionEffects(
+    root: FiberRoot,
+    returnFiber: Fiber,
+    deletedFiber: Fiber
+) {
+    if (supportsMutation) {
+        let parent: Fiber | null = returnFiber
+        // 为什么要遍历？因为 returnFiber 可能不是直接的 HostComponent/HostRoot （如 Fragment、Context 等无 DOM 节点的 Fiber）
+        findParent: while (parent !== null) {
+            switch (parent.tag) {
+                // case1: 如果父节点是普通 DOM 组件（如 div/button 等 HostComponent）
+                case HostComponent: {
+                    hostParent = parent.stateNode
+                    hostParentIsContainer = false
+                    break findParent
+                }
+                // case2：父节点是 HostRoot（应用根节点，对应 ReactDOM.createRoot 的容器）
+                case HostRoot: {
+                    hostParent = parent.stateNode.containerInfo
+                    hostParentIsContainer = true
+                    break findParent
+                }
+                // case3: 父节点是 HostPortal（Portal 组件，对应 ReactDOM.createPortal）
+                case HostPortal: {
+                    hostParent = parent.stateNode.containerInfo
+                    hostParentIsContainer = true
+                    break findParent
+                }
+            }
+            // 其他 Fiber 类型（如 Fragment、Context、FunctionComponent 等）：无真实 DOM 节点，继续向上遍历
+            parent = parent.return
+        }
+
+        if (hostParent === null) {
+            throw new Error('hostParent 没找到，程序出错');
+        }
+        commitDeletionEffectsOnFiber(root, returnFiber, deletedFiber)
+        hostParent = null
+        hostParentIsContainer = false
+    } else {
+        commitDeletionEffectsOnFiber(root, returnFiber, deletedFiber)
+    }
+
+    // 重置 Fiber 的 return/child/sibling 指针、清空 effectTag、解绑 ref 等，便于 GC 回收
+    detachFiberMutation(deletedFiber)
 }
 
 /**
@@ -458,12 +1047,20 @@ function recursivelyTraverseMutationEffects(
     // 1. 先处理待删除的子节点（删除操作需在子节点处理前执行）
     const deletions = parentFiber.deletions // 父节点记录的待删除子节点列表
     if (deletions !== null) {
-        debugger
+        for (let i = 0; i < deletions.length; i++) {
+            const childToDelete = deletions[i]
+            try {
+                commitDeletionEffects(root, parentFiber, childToDelete)
+            } catch (error) {
+                captureCommitPhaseError(childToDelete, parentFiber, error)
+            }
+        }
     }
+
     // 2. 处理当前父节点的子树中所有节点的 Mutation 阶段副作用
     if (parentFiber.subtreeFlags & MutationMask) { // 检查子树是否包含 Mutation 阶段的副作用标记（优化：避免无意义遍历）
         let child = parentFiber.child  // 从第一个子节点开始遍历
-        while(child !== null) {
+        while (child !== null) {
             // 处理单个子节点的 Mutation 阶段副作用（如插入、更新 DOM）
             commitMutationEffectsOnFiber(child, root, lanes)
             child = child.sibling // 遍历下一个兄弟节点（横向遍历）
@@ -506,7 +1103,7 @@ function commitPlacement(finishedWork: Fiber) {
                 parentFiber.flags &= ~ContentReset  // 清除标记
             }
             // 找到插入的参考节点 （当前节点应插入到该节点之前）
-            const before = getHostSibling(finishedWork) 
+            const before = getHostSibling(finishedWork)
             // 递归插入当前节点及其子树中所有需要插入的宿主节点
             insertOrAppendPlacementNode(finishedWork, before, parent)
             break;
@@ -533,7 +1130,7 @@ function commitPlacement(finishedWork: Fiber) {
  * isHostParent 是判断一个 Fiber 节点是否为 “宿主父节点”** 的工具函数。所谓 “宿主父节点”，指的是能够直接作为 DOM 元素容器的 Fiber 节点，它们是连接 React 虚拟 Fiber 树与浏览器真实 DOM 树的关键节点。
  * 核心背景：宿主节点的特殊作用
  *  在 React 中，Fiber 节点分为多种类型（如组件节点、宿主节点等），其中宿主节点（Host Node） 是直接对应真实 DOM 元素或容器的节点（如 <div> 对应 HostComponent，根容器对应 HostRoot）
- * */ 
+ * */
 function isHostParent(fiber: Fiber): boolean {
     return (
         fiber.tag === HostComponent || // 宿主组件（如 <div>、<span> 等对应 DOM 元素的节点）
@@ -558,7 +1155,7 @@ function getHostParentFiber(fiber: Fiber): Fiber {
  *  核心背景：为什么需要参考节点？
  *   当 React 需要将一个标记为 Placement（待插入）的节点添加到 DOM 时，需要明确插入位置。浏览器的 insertBefore 等 API 要求指定 “参考节点”（即新节点插入到哪个节点的前面）。
  *   getHostSibling 的任务就是找到这个参考节点，规则是：参考节点通常是待插入节点在 Fiber 树中的 “下一个稳定的宿主节点”（即未被标记为 Placement 的宿主节点）。
- */ 
+ */
 function getHostSibling(fiber: Fiber) {
     // 查找待插入节点的下一个宿主节点作为参考节点
     // 若存在连续插入的节点，需要跳过它们，可能导致指数级搜索（待优化）
@@ -616,7 +1213,28 @@ function insertOrAppendPlacementNode(
     before: Instance | null, // 参考节点（新节点插入到该节点之前，为 null 则插入到末尾）
     parent: Instance // 父容器的真实 DOM 元素
 ) {
-    debugger
+    const { tag } = node
+    const isHost = tag === HostComponent || tag === HostText
+    if (isHost) {
+        const stateNode = node.stateNode
+        if (before) {
+            insertBefore(parent, stateNode, before)
+        } else {
+            appendChild(parent, stateNode)
+        }
+    } else if (tag === HostPortal) {
+        debugger
+    } else {
+        const child = node.child
+        if (child !== null) {
+            insertOrAppendPlacementNode(child, before, parent)
+            let sibling = child.sibling
+            while (sibling !== null) {
+                insertOrAppendPlacementNode(sibling, before, parent)
+                sibling = sibling.sibling
+            }
+        }
+    }
 }
 
 /**
@@ -659,11 +1277,124 @@ function insertOrAppendPlacementNodeIntoContainer(
     }
 }
 
+function commitPassiveUnmountInsideDeletedTreeOnFiber(
+    current: Fiber,
+    nearestMountedAncestor: Fiber | null
+) {
+    switch (current.tag) {
+        case FunctionComponent:
+        case ForwardRef:
+        case SimpleMemoComponent: {
+            commitHookEffectListUnmount(HookPassive, current, nearestMountedAncestor)
+            break
+        }
+        case LegacyHiddenComponent:
+        case OffscreenComponent:
+        case CacheComponent: {
+            break
+        }
+    }
+}
+
 function commitPassiveUnmountEffectsInsideOfDeletedTree_begin(
     deletedSubtreeRoot: Fiber,
     nearestMountedAncestor: Fiber | null
 ) {
-    debugger
+    while (nextEffect !== null) {
+        const fiber = nextEffect
+        commitPassiveUnmountInsideDeletedTreeOnFiber(fiber, nearestMountedAncestor)
+        const child = fiber.child
+        if (child !== null) {
+            child.return = fiber
+            nextEffect = child
+        } else {
+            commitPassiveUnmountEffectsInsideOfDeletedTree_complete(deletedSubtreeRoot)
+        }
+    }
+}
+
+function detachFiberAfterEffects(fiber: Fiber) {
+    const alternate = fiber.alternate
+    if (alternate !== null) {
+        fiber.alternate = null
+        detachFiberAfterEffects(alternate)
+    }
+
+    if (!(deletedTreeCleanUpLevel >= 2)) {
+        fiber.child = null;
+        fiber.deletions = null;
+        fiber.dependencies = null;
+        fiber.memoizedProps = null;
+        fiber.memoizedState = null;
+        fiber.pendingProps = null;
+        fiber.sibling = null;
+        fiber.stateNode = null;
+        fiber.updateQueue = null;
+    } else {
+        fiber.child = null;
+        fiber.deletions = null;
+        fiber.sibling = null;
+
+        if (fiber.tag === HostComponent) {
+            const hostInstance: Instance = fiber.stateNode as Instance
+            if (hostInstance !== null) {
+                detachDeletedInstance(hostInstance)
+            }
+        }
+
+        fiber.stateNode = null
+
+        if (deletedTreeCleanUpLevel >= 3) {
+            fiber.return = null;
+            fiber.dependencies = null;
+            fiber.memoizedProps = null;
+            fiber.memoizedState = null;
+            fiber.pendingProps = null;
+            fiber.stateNode = null;
+            fiber.updateQueue = null;
+        }
+    }
+}
+
+/**
+ * 作用: 遍历被删除的 Fiber 子树，根据清理级别执行不同粒度的 Fiber 节点清理，最终终止遍历并完成子树分离
+*/
+function commitPassiveUnmountEffectsInsideOfDeletedTree_complete(
+    deletedSubtreeRoot: Fiber
+) {
+    // 遍历待处理的副作用节点 (nextEffect 是遍历游标)
+    while (nextEffect !== null) {
+        // 1. 获取当前处理的 Fiber 节点及其兄弟节点和父节点引用
+        const fiber = nextEffect
+        const sibling = fiber.sibling
+        const returnFiber = fiber.return
+
+        // 2. 根据清理级别决定清理粒度
+        if (deletedTreeCleanUpLevel >= 2) { // 深度清理（级别≥2）→ 递归清理整棵删除子树的所有 Fiber 节点
+            detachFiberAfterEffects(fiber) // 清理当前 Fiber 节点的字段/副作用
+            // 若遍历到删除子树的根节点，终止遍历（完成整棵树清理）
+            if (fiber === deletedSubtreeRoot) {
+                nextEffect = null
+                return
+            }
+        } else {
+            // 默认清理（级别0）→ 仅清理删除子树的根节点，不递归子节点
+            if (fiber === deletedSubtreeRoot) {
+                detachFiberAfterEffects(fiber); // 仅清理根节点
+                nextEffect = null
+                return
+            }
+        }
+
+        // 3. 遍历逻辑：优先处理兄弟节点，无兄弟则回退到父节点
+        if (sibling !== null) {
+            sibling.return = returnFiber
+            nextEffect = sibling
+            return
+        }
+
+        nextEffect = returnFiber
+    }
 }
 
 // 该函数负责 向下遍历 Fiber 树（从父节点到子节点），核心是处理 “子节点删除” 和进入子树继续遍历，不直接执行副作用，只做 “遍历引导” 和 “删除预处理”。
@@ -722,7 +1453,11 @@ function safelyCallDestroy(
     nearestMountedAncestor: Fiber | null,
     destroy: () => void
 ) {
-    debugger
+    try {
+        destroy()
+    } catch (error) {
+        captureCommitPhaseError(current, nearestMountedAncestor, error)
+    }
 }
 
 function commitHookEffectListUnmount(
@@ -914,7 +1649,7 @@ function commitPassiveMountEffects_complete(
 ) {
     while (nextEffect !== null) {
         const fiber = nextEffect // 当前处理的 Fiber 节点
-        
+
         // 关键：当前节点有 Passive 标记 → 执行 useEffect 的挂载逻辑
         if ((fiber.flags & Passive) !== NoFlags) {
             try {
@@ -947,5 +1682,31 @@ function commitPassiveMountEffects_complete(
 
         // 步骤2：无兄弟节点 → 回溯到父节点
         nextEffect = fiber.return
+    }
+}
+
+// ref 赋值核心函数（ref.current = DOM 节点/ 执行 ref 回调）
+function commitAttachRef(finishedWork: Fiber) {
+    const ref = finishedWork.ref
+    if (ref !== null) {
+        const instance = finishedWork.stateNode
+        let instanceToUse
+        switch (finishedWork.tag) {
+            case HostComponent:
+                instanceToUse = getPublicInstance(instance)
+                break
+            default:
+                instanceToUse = instance
+        }
+
+        if (enableScopeAPI && finishedWork.tag === ScopeComponent) {
+            instanceToUse = instance
+        }
+
+        if (typeof ref === 'function') {
+            let retVal = ref(instanceToUse)
+        } else {
+            ref.current = instanceToUse
+        }
     }
 }

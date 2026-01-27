@@ -13,14 +13,14 @@ import isEventSupported from "../isEventSupported"
 import { updateValueIfChanged } from "../../client/inputValueTracking"
 import { setDefaultValue } from "../../client/ReactDOMInput"
 import getEventTarget from "../getEventTarget"
-import {batchedUpdates} from '../ReactDOMUpdateBatching';
+import { batchedUpdates } from '../ReactDOMUpdateBatching';
 import { SyntheticEvent } from "../SyntheticEvent"
 import { enqueueStateRestore } from "../ReactDOMControlledComponent"
 
 
 let activeElement: any = null;
 let activeElementInst: any = null;
-let isInputEventSupported = canUseDOM ? isEventSupported('input') && ((!document as any).documentMode || (document as any).documentMode > 9) : false
+let isInputEventSupported = canUseDOM ? isEventSupported('input') && ((!(document as any).documentMode) || (document as any).documentMode > 9) : false
 
 function shouldUseChangeEvent(elem) {
     const nodeName = elem.nodeName && elem.nodeName.toLowerCase()
@@ -41,7 +41,7 @@ function shouldUseClickEvent(elem) {
 
 function createAndAccumulateChangeEvent(
     dispatchQueue,
-    inst, 
+    inst,
     nativeEvent,
     target
 ) {
@@ -49,7 +49,7 @@ function createAndAccumulateChangeEvent(
     const listeners = accumulateTwoPhaseListeners(inst, 'onChange')
     if (listeners.length > 0) {
         const event = new (SyntheticEvent as any)('onChange', 'change', null, nativeEvent, target)
-        dispatchQueue.push({event, listeners})
+        dispatchQueue.push({ event, listeners })
     }
 }
 
@@ -149,7 +149,7 @@ function getTargetInstForClickEvent(
 function handleControlledInputBlur(
     node: HTMLInputElement
 ) {
-    const state = (node as  any)._wrapperState;
+    const state = (node as any)._wrapperState;
     if (!state || !state.controlled || node.type !== 'number') {
         return
     }
@@ -213,7 +213,7 @@ function extractEvents(
     if (domEventName === 'focusout') {
         handleControlledInputBlur(targetNode as any)
     }
-    
+
 }
 
 export { registerEvents, extractEvents }

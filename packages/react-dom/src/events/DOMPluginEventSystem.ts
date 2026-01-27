@@ -1,5 +1,5 @@
 import type { Fiber } from "react-reconciler/src/ReactInternalTypes"
-import type { ReactSyntheticEvent } from "./ReactSyntheticEventType"
+import type { KnownReactSyntheticEvent, ReactSyntheticEvent } from "./ReactSyntheticEventType"
 
 import { enableCreateEventHandleAPI, enableLegacyFBSupport, enableScopeAPI } from "shared/ReactFeatureFlags"
 import { COMMENT_NODE, DOCUMENT_NODE } from "../shared/HTMLNodeType"
@@ -11,10 +11,10 @@ import { createEventListenerWrapperWithPriority } from "./ReactDOMEventListener"
 import { addEventBubbleListener, addEventCaptureListener } from "./EventListener"
 import { AnyNativeEvent } from "./PluginModuleType"
 import { isReplayingEvent } from "./CurrentReplayingEvent"
-import { HostComponent, HostPortal, HostRoot, ScopeComponent } from "react-reconciler/src/ReactWorkTags"
+import { HostComponent, HostPortal, HostRoot, HostText, ScopeComponent } from "react-reconciler/src/ReactWorkTags"
 import { batchedUpdates } from "./ReactDOMUpdateBatching"
 import getEventTarget from "./getEventTarget"
-import { getEventHandlerListeners } from "../client/ReactDOMComponentTree"
+import { getClosestInstanceFromNode, getEventHandlerListeners, getEventListenerSet } from "../client/ReactDOMComponentTree"
 import { getListener } from "./getListener"
 import { invokeGuardedCallbackAndCatchFirstError, rethrowCaughtError } from "shared/ReactErrorUtils"
 import * as SimpleEventPlugin from './plugins/SimpleEventPlugin'
@@ -28,7 +28,7 @@ type DispatchListener = {
     listener: Function;
     currentTarget: EventTarget;
 };
-  
+
 type DispatchEntry = {
     event: ReactSyntheticEvent;
     listeners: Array<DispatchListener>;
@@ -192,7 +192,7 @@ export function listenToAllSupportedEvents(rootContainerElement: EventTarget) {
 }
 
 export function listenToNativeEvent(
-    domEventName: DOMEventName, 
+    domEventName: DOMEventName,
     isCapturePhaseListener: boolean,
     target: EventTarget
 ) {
@@ -272,7 +272,13 @@ export function listenToNonDelegatedEvent(
     domEventName: DOMEventName,
     targetElement: Element
 ) {
-    debugger
+    const isCapturePhaseListener = false
+    const listenerSet = getEventListenerSet(targetElement)
+    const listenerSetKey = getListenerSetKey(domEventName, isCapturePhaseListener)
+    if (!listenerSet.has(listenerSetKey)) {
+        addTrappedEventListener(targetElement, domEventName, IS_NON_DELEGATED, isCapturePhaseListener)
+        listenerSet.add(listenerSetKey)
+    }
 }
 
 function isMatchingRootContainer(
@@ -282,8 +288,8 @@ function isMatchingRootContainer(
     // 两种匹配情况：
     // 1. 两个容器直接相等（同一 DOM 节点）
     // 2. grandContainer 是注释节点，且其父节点是 targetContainer（特殊场景：Suspense 边界的注释节点）
-    return grandContainer === targetContainer || 
-    (grandContainer.nodeType === COMMENT_NODE && grandContainer.parentNode === targetContainer)
+    return grandContainer === targetContainer ||
+        (grandContainer.nodeType === COMMENT_NODE && grandContainer.parentNode === targetContainer)
 }
 
 function executeDispatch(
@@ -293,7 +299,6 @@ function executeDispatch(
 ) {
     const type = event.type || 'unknown-event'
     event.currentTarget = currentTarget
-    // @ts-ignore
     invokeGuardedCallbackAndCatchFirstError(type, listener, undefined, event)
     event.currentTarget = null
 }
@@ -310,7 +315,7 @@ function processDispatchQueueItemsInOrder(
     // ====================== 分支1：捕获阶段（从根 → 目标，反向遍历） ======================
     if (inCapturePhase) {
         // 反向遍历监听器列表（原列表是“目标 → 根”，反向后变为“根 → 目标”）
-        for (let i = dispatchListeners.length - 1; i >=0; i--) {
+        for (let i = dispatchListeners.length - 1; i >= 0; i--) {
             const { instance, currentTarget, listener } = dispatchListeners[i]
             // 检查： 若切换到新组件且事件已中断，终止传播
             if (instance !== previousInstance && event.isPropagationStopped()) {
@@ -321,7 +326,7 @@ function processDispatchQueueItemsInOrder(
             // 更新上一个组件实例
             previousInstance = instance
         }
-    // ====================== 分支2：冒泡阶段（从目标 → 根，正向遍历） ======================
+        // ====================== 分支2：冒泡阶段（从目标 → 根，正向遍历） ======================
     } else {
         // 正向遍历监听器列表（原列表是“目标 → 根”，直接按顺序触发）
         for (let i = 0; i < dispatchListeners.length; i++) {
@@ -434,15 +439,21 @@ export function dispatchEventForPluginEventSystem(
 
                     // 若容器不匹配，从 DOM 层面向上查找属于当前根容器的节点
                     while (container !== null) {
-                        debugger
-                        break
+                        const parentNode = getClosestInstanceFromNode(container)
+                        if (parentNode === null) return
+                        const parentTag = parentNode?.tag
+                        if (parentTag === HostComponent || parentTag === HostText) {
+                            node = ancestorInst = parentNode
+                            continue mainLoop
+                        }
+                        container = container.parentNode
                     }
                 }
                 node = node.return
             }
         }
     }
-    
+
     batchedUpdates(() => dispatchEventsForPlugins(domEventName, eventSystemFlags, nativeEvent, ancestorInst, targetContainer))
 }
 
@@ -478,7 +489,7 @@ export function accumulateSinglePhaseListeners(
     let instance = targetFiber // 遍历起点：目标 Fiber
     let lastHostComponent: any = null // 记录最近的「HostComponent 对应的 DOM 节点」
 
-    while(instance !== null) {
+    while (instance !== null) {
         const { stateNode, tag } = instance
         if (tag === HostComponent && stateNode !== null) {
             lastHostComponent = stateNode  // 更新最近的 DOM 节点
@@ -503,7 +514,7 @@ export function accumulateSinglePhaseListeners(
                     listeners.push(createDispatchListener(instance, listener, lastHostComponent))
                 }
             }
-        // 处理「ScopeComponent」（事件作用域隔离，可选特性）
+            // 处理「ScopeComponent」（事件作用域隔离，可选特性）
         } else if (
             enableCreateEventHandleAPI &&
             enableScopeAPI &&
@@ -542,5 +553,122 @@ export function accumulateTwoPhaseListeners(
     targetFiber: Fiber | null,
     reactName: string
 ): Array<DispatchListener> {
-    debugger
+    const captureName = reactName + 'Captrue'
+    const listeners: Array<DispatchListener> = []
+    let instance = targetFiber
+    while (instance !== null) {
+        const { stateNode, tag } = instance
+        if (tag === HostComponent && stateNode !== null) {
+            const currentTarget = stateNode
+            const captureListener = getListener(instance, captureName)
+            if (captureListener !== null) {
+                listeners.unshift(createDispatchListener(instance, captureListener, currentTarget))
+            }
+            const bubbleListener = getListener(instance, reactName)
+            if (bubbleListener !== null) {
+                listeners.push(createDispatchListener(instance, bubbleListener, currentTarget))
+            }
+        }
+        instance = instance.return
+    }
+    return listeners
+}
+
+export function getListenerSetKey(
+    domEventName: DOMEventName,
+    capture: boolean
+): string {
+    return `${domEventName}__${capture ? 'capture' : 'bubble'}`
+}
+
+function getParent(inst: Fiber | null): Fiber | null {
+    if (inst === null) return null
+    do {
+        inst = inst?.return
+    } while (inst && inst.tag !== HostComponent)
+
+    if (inst) return inst
+    return null
+}
+
+function getLowestCommonAncestor(instA: Fiber, instB: Fiber): Fiber | null {
+    let nodeA: any = instA
+    let nodeB: any = instB
+    let depthA = 0
+    for (let tempA: any = nodeA; tempA; tempA = getParent(tempA)) {
+        depthA++
+    }
+    let depthB = 0
+    for (let tempB: any = nodeB; tempB; tempB = getParent(tempB)) {
+        depthB++
+    }
+
+    while (depthA - depthB > 0) {
+        nodeA = getParent(nodeA)
+        depthA--
+    }
+
+    while (depthB - depthA > 0) {
+        nodeB = getParent(nodeB)
+        depthB--
+    }
+    let depth = depthA
+    while (depth--) {
+        if (nodeA === nodeB || (nodeB !== null && nodeA === nodeB.alternate)) return nodeA
+        nodeA = getParent(nodeA)
+        nodeB = getParent(nodeB)
+    }
+    return null
+}
+
+function accumulateEnterLeaveListenersForEvent(
+    dispatchQueue: DispatchQueue,
+    event: KnownReactSyntheticEvent,
+    target: Fiber,
+    common: Fiber | null,
+    inCapturePhase: boolean
+): void {
+    const registrationName = event._reactName
+    const listeners: Array<DispatchListener> = []
+    let instance: any = target
+    while (instance !== null) {
+        if (instance === common) break
+        const { alternate, stateNode, tag } = instance
+        if (alternate !== null && alternate === common) break
+        if (tag === HostComponent && stateNode !== null) {
+            const currentTarget = stateNode
+            if (inCapturePhase) {
+                const captureListener = getListener(instance, registrationName)
+                if (captureListener !== null) {
+                    listeners.unshift(createDispatchListener(instance, captureListener, currentTarget))
+                }
+            } else if (!inCapturePhase) {
+                const bubbleListener = getListener(instance, registrationName)
+                if (bubbleListener !== null) {
+                    listeners.push(createDispatchListener(instance, bubbleListener, currentTarget))
+                }
+            }
+        }
+        instance = instance.return
+    }
+
+    if (listeners.length !== 0) {
+        dispatchQueue.push({ event, listeners })
+    }
+}
+
+export function accumulateEnterLeaveTwoPhaseListeners(
+    dispatchQueue: DispatchQueue,
+    leaveEvent: KnownReactSyntheticEvent,
+    enterEvent: null | KnownReactSyntheticEvent,
+    from: Fiber | null,
+    to: Fiber | null
+): void {
+    const common = from && to ? getLowestCommonAncestor(from, to) : null
+    if (from !== null) {
+        accumulateEnterLeaveListenersForEvent(dispatchQueue, leaveEvent, from, common, false)
+    }
+    if (to !== null && enterEvent !== null) {
+        accumulateEnterLeaveListenersForEvent(dispatchQueue, enterEvent, to, common, true)
+    }
 }

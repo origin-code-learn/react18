@@ -1,6 +1,6 @@
 import type { Fiber } from "react-reconciler/src/ReactInternalTypes"
 import type { DOMEventName } from "../DOMEventNames"
-import type { DispatchQueue } from "../DOMPluginEventSystem"
+import { accumulateTwoPhaseListeners, type DispatchQueue } from "../DOMPluginEventSystem"
 import type { AnyNativeEvent } from "../PluginModuleType"
 import type { EventSystemFlags } from "../EventSystemFlags"
 import { registerTwoPhaseEvent } from "../EventRegistry"
@@ -10,6 +10,8 @@ import { DOCUMENT_NODE } from "react-dom/src/shared/HTMLNodeType"
 import getActiveElement from "react-dom/src/client/getActiveElement"
 import { hasSelectionCapabilities } from "react-dom/src/client/ReactInputSelection"
 import { canUseDOM } from "shared/ExecutionEnvironment"
+import shallowEqual from "shared/shallowEqual"
+import { SyntheticEvent } from '../../events/SyntheticEvent';
 
 let activeElement: any = null;
 let activeElementInst: any = null;
@@ -41,8 +43,8 @@ function getSelection(node: any) {
 }
 
 function constructSelectEvent(
-    dispatchQueue, 
-    nativeEvent, 
+    dispatchQueue,
+    nativeEvent,
     nativeEventTarget
 ) {
     const doc = getEventTargetDocument(nativeEventTarget)
@@ -51,7 +53,15 @@ function constructSelectEvent(
 
     const currentSelection = getSelection(activeElement)
 
-    debugger
+    if (!lastSelection || !shallowEqual(lastSelection, currentSelection)) {
+        lastSelection = currentSelection
+        const listeners = accumulateTwoPhaseListeners(activeElementInst, 'onSelect')
+        if (listeners.length > 0) {
+            const event = new (SyntheticEvent as any)('onSelect', 'select', null, nativeEvent, nativeEventTarget)
+            dispatchQueue.push({ event, listeners })
+            event.target = activeElement
+        }
+    }
 }
 
 function registerEvents() {
@@ -79,11 +89,11 @@ function extractEvents(
 ) {
     const targetNode = targetInst ? getNodeFromInstance(targetInst) : window
 
-    switch(domEventName) {
+    switch (domEventName) {
         case 'focusin':
             if (isTextInputElement(targetNode) || (targetNode as any).contentEditable === 'true') {
                 activeElement = targetNode
-                activeElementInst = targetNode
+                activeElementInst = targetInst
                 lastSelection = null
             }
             break

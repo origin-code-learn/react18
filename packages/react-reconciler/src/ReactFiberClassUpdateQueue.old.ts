@@ -69,7 +69,7 @@ export function createUpdate<T>(eventTime: number, lane: Lane): Update<T> {
  *  - 维护更新队列的结构（循环链表），确保更新能按顺序被处理；
  *  - 区分 “不安全的类组件渲染阶段更新” 和 “并发模式下的更新”，采用不同的入队逻辑；
  *  - 返回更新所影响的根节点（FiberRoot），为后续的调度（scheduleUpdateOnFiber）提供入口
- * */ 
+ * */
 export function enqueueUpdate<State>(
     fiber: Fiber,
     update: Update<State>,
@@ -83,7 +83,7 @@ export function enqueueUpdate<State>(
     // 获取更新队列中的 共享队列 sharedQueue，共享队列是 Fiber 节点中存储待更新的容器（通常是循环链表结构）
     const sharedQueue: SharedQueue<State> = updateQueue.shared
     // 判断是否为 不安全的类组件渲染更新阶段 （类组件在渲染阶段调用 setState，可能导致重复渲染或不一致）
-    if (isUnsafeClassRenderPhaseUpdate(fiber)) { 
+    if (isUnsafeClassRenderPhaseUpdate(fiber)) {
         // 将更新加入循环链表
         const pending = sharedQueue.pending // 链表尾部指针
         if (pending === null) {
@@ -118,38 +118,46 @@ export function cloneUpdateQueue<State>(current: Fiber, workInProgress: Fiber) {
 }
 
 function getStateFromUpdate<State>(
-    workInProgress: Fiber,
-    queue: UpdateQueue<State>,
-    update: Update<State>,
-    prevState: State,
-    nextProps: any,
-    instance: any
+    workInProgress: Fiber,       // 当前工作中的 Fiber 节点
+    queue: UpdateQueue<State>,   // 组件的更新队列
+    update: Update<State>,       // 当前要处理的单个 Update 对象
+    prevState: State,            // 组件的旧状态（更新前的 state）
+    nextProps: any,              // 组件的新 props（本次渲染的 props）
+    instance: any                // 组件实例（类组件为 this，函数组件为 null）
 ): any {
     switch (update.tag) {
+        // 1. 替换整个状态（ReplaceState）：暂未实现（仅调试断点）
         case ReplaceState: {
             debugger
         }
+        // 2. 捕获阶段更新（CaptureUpdate）：暂未实现（仅调试断点）
         case CaptureUpdate: {
             debugger
         }
+        // 3. 合并状态（UpdateState）：最核心的分支（对应普通 setState）
         case UpdateState: {
             const payload = update.payload
             let partialState
             if (typeof payload === 'function') {
+                // 场景1：payload 是函数 → 执行函数，传入 prevState 和 nextProps 计算部分状态
                 partialState = payload.call(instance, prevState, nextProps)
             } else {
+                // 场景2：payload 是对象 → 直接作为部分状态
                 partialState = payload
             }
+            // 边界处理：若计算出的部分状态为 null/undefined → 不修改状态，返回旧值
             if (partialState === null || partialState === undefined) {
                 return prevState
             }
 
             return assign({}, prevState, partialState)
         }
+        // 4. 强制更新（ForceUpdate）：暂未实现（仅调试断点）
         case ForceUpdate: {
             debugger
         }
     }
+    // 未匹配到任何更新类型 → 返回旧状态
     return prevState
 }
 
@@ -165,12 +173,12 @@ function getStateFromUpdate<State>(
  * 
  */
 export function processUpdateQueue<State>(
-    workInProgress: Fiber, 
-    props: any, 
-    instance: any, 
+    workInProgress: Fiber,
+    props: any,
+    instance: any,
     renderLanes: Lanes
 ) {
-    
+
     const queue: UpdateQueue<State> = workInProgress.updateQueue as any // 当前节点的更新队列
     hasForceUpdate = false  // 重置强制更新标记
 
@@ -180,7 +188,7 @@ export function processUpdateQueue<State>(
     if (pendingQueue !== null) {
         queue.shared.pending = null // 清空 pending 队列，避免重复处理
         // pending 队列是循环链表，先断开循环（最后一个节点的 next 指向 null）; 需要将 pendingQueue 的循环链剪开 链在 lastBaseUpdate 后面
-        const lastPendingUpdate = pendingQueue 
+        const lastPendingUpdate = pendingQueue
         const firstPendingUpdate = lastPendingUpdate?.next
         lastPendingUpdate.next = null
         if (lastBaseUpdate === null) {
@@ -286,8 +294,8 @@ export function processUpdateQueue<State>(
                 }
             }
 
-        } while(true)
-        
+        } while (true)
+
         // 确定新的基础状态和基础队列
         if (newLastBaseUpdate === null) {
             newBaseState = newState // 所有更新都已处理，新状态即为基础状态
@@ -305,7 +313,7 @@ export function processUpdateQueue<State>(
             do {
                 newLanes = mergeLanes(newLanes, interleaved.lane) // 合并交错更新的优先级
                 interleaved = interleaved.next as Update<State>
-            } while(interleaved !== lastInterleaved)
+            } while (interleaved !== lastInterleaved)
         } else if (firstBaseUpdate === null) {
             queue.shared.lanes = NoLanes // 队列为空时重置优先级
         }
@@ -316,4 +324,81 @@ export function processUpdateQueue<State>(
         workInProgress.lanes = newLanes
         workInProgress.memoizedState = newState
     }
+}
+
+/**
+ * enqueueCapturedUpdate 是 React 渲染阶段处理「子组件抛出异常时捕获的更新」的核心函数 —— 当子组件渲染抛错，父组件捕获到这个错误并产生需要执行的更新（如 setState）时，该函数会将这个「捕获型更新」安全地加入到 work-in-progress Fiber 的更新队列中，且保证仅作用于当前渲染流程、不污染旧的 current Fiber 队列，是 React 错误边界和渲染阶段异常处理的关键逻辑。
+*/
+export function enqueueCapturedUpdate<State>(
+    workInProgress: Fiber,
+    capturedUpdate: Update<State>
+) {
+    // 注释：捕获型更新是子组件渲染阶段抛出的更新，若渲染被中止则应丢弃
+    // 因此仅将其加入 work-in-progress 队列，而非 current 队列（current 是已提交到 DOM 的稳定队列）
+    let queue: UpdateQueue<State> = workInProgress.updateQueue as any
+    // 第一步：检查 work-in-progress 队列是否与 current 队列共享 ==========
+    const current = workInProgress.alternate
+    if (current !== null) {
+        const currentQueue: UpdateQueue<State> = current.updateQueue as any
+        // 关键判断：work-in-progress 队列和 current 队列是否是同一个引用（未克隆）
+        if (queue === currentQueue) {
+            // 场景：父 Fiber 之前「跳过调和（bailout）」，但子组件抛错导致父组件需要捕获更新
+            // 此时 work-in-progress 队列未克隆，直接修改会污染 current 队列 → 必须先克隆队列
+            let newFirst: any = null  // 克隆后的更新队列头指针
+            let newLast: any = null  // 克隆后的更新队列尾指针
+            const firstBaseUpdate = queue.firstBaseUpdate //获取原队列的第一个基础更新
+            if (firstBaseUpdate !== null) {
+                // 1. 遍历原基础更新队列，逐个克隆 Update 对象（避免修改原队列）
+                let update: any = firstBaseUpdate
+                do {
+                    const clone: Update<State> = {
+                        eventTime: update.eventTime,
+                        lane: update.lane,
+                        tag: update.tag,
+                        payload: update.payload,
+                        callback: update.callback,
+                        next: null
+                    }
+                    // 构建克隆后的链表
+                    if (newLast === null) {
+                        newFirst = newLast = clone  // 第一个克隆节点
+                    } else {
+                        newLast.next = clone  // 追加到链表尾部
+                        newLast = clone
+                    }
+                    update = update.next  // 遍历下一个更新
+                } while (update !== null)
+
+                // 2. 将捕获型更新追加到克隆队列的尾部
+                if (newLast === null) {
+                    newFirst = newLast = capturedUpdate
+                } else {
+                    newLast.next = capturedUpdate
+                    newLast = capturedUpdate
+                }
+            } else {
+                // 原队列无基础更新 → 克隆队列直接以捕获型更新为唯一节点
+                newFirst = newLast = capturedUpdate
+            }
+            // 3. 创建新的更新队列，替换 work-in-progress 的队列（不影响 current）
+            queue = {
+                baseState: currentQueue.baseState,
+                firstBaseUpdate: newFirst,
+                lastBaseUpdate: newLast,
+                shared: currentQueue.shared,
+                effects: currentQueue.effects
+            }
+            workInProgress.updateQueue = queue
+            return
+        }
+    }
+
+    // 第二步：队列已克隆 → 直接追加捕获型更新到队列尾部 ==========
+    const lastBaseUpdate = queue.lastBaseUpdate
+    if (lastBaseUpdate === null) {
+        queue.firstBaseUpdate = capturedUpdate
+    } else {
+        lastBaseUpdate.next = capturedUpdate
+    }
+    queue.lastBaseUpdate = capturedUpdate
 }
