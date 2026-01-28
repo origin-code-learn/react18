@@ -1,4 +1,4 @@
-import { DefaultEventPriority } from "react-reconciler/src/ReactEventPriorities";
+import { DefaultEventPriority } from "react-reconciler/src/ReactEventPriorities.old";
 import { FiberRoot } from "react-reconciler/src/ReactInternalTypes";
 import {
     getEventPriority,
@@ -475,4 +475,8 @@ export function unhideTextInstance(textInstance: TextInstance, text: string) {
 
 export function preparePortalMount(portalInstance: Instance) {
     listenToAllSupportedEvents(portalInstance)
+}
+
+export function commitTextUpdate(textInstance: TextInstance, oldText: string, newText: string) {
+    textInstance.nodeValue = newText
 }

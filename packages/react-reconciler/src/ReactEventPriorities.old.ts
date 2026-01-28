@@ -10,6 +10,7 @@ export const IdleEventPriority: EventPriority = IdleLane;
 
 let currentUpdatePriority: EventPriority = NoLane;
 export function getCurrentUpdatePriority(): EventPriority {
+    console.log('-----currentUpdatePriority----->', currentUpdatePriority)
     return currentUpdatePriority
 }
 

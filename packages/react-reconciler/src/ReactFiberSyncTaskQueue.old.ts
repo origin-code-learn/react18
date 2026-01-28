@@ -1,4 +1,4 @@
-import { DiscreteEventPriority, getCurrentUpdatePriority, setCurrentUpdatePriority } from "./ReactEventPriorities";
+import { DiscreteEventPriority, getCurrentUpdatePriority, setCurrentUpdatePriority } from "./ReactEventPriorities.old";
 import { ImmediatePriority, scheduleCallback, SchedulerCallback } from "./Scheduler";
 
 // 同步回调队列：存储需要同步执行的回调函数
@@ -19,6 +19,7 @@ let isFlushingSyncQueue: boolean = false;
 */
 export function flushSyncCallbacks() {
     // 检查是否正在执行队列，且队列不为空（避免重入和空执行）
+    console.log('----flushSyncCallbacks check----', isFlushingSyncQueue, syncQueue?.length)
     if (!isFlushingSyncQueue && syncQueue !== null) {
         // 标记正在执行队列，防止重入（避免嵌套调用导致的混乱）
         isFlushingSyncQueue = true

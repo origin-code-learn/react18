@@ -10,12 +10,14 @@ const distPath = path.resolve(__dirname, '../../dist/node_modules')
 
 export function resolvePkgPath(pkgName, isDist) {
     if (isDist) {
-        return `${distPath}/${pkgName}`
+        // return `${distPath}/${pkgName}`
+        return path.join(distPath, pkgName);
     }
-    return `${pkgPath}/${pkgName}`
+    // return `${pkgPath}/${pkgName}`
+    return path.join(pkgPath, pkgName);
 }
 
-export function getPackageJOSN(pkgName) {
+export function getPackageJSON(pkgName) {
     const path = `${resolvePkgPath(pkgName)}/package.json`
     const str = fs.readFileSync(path, { encoding: 'utf-8' })
     return JSON.parse(str)

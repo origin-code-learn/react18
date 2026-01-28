@@ -1,0 +1,11 @@
+# .pnpmrc
+# 提升自研包到根 node_modules，避免隔离
+public-hoist-pattern[] = "react"
+public-hoist-pattern[] = "react-dom"
+public-hoist-pattern[] = "react-reconciler"
+public-hoist-pattern[] = "scheduler"
+public-hoist-pattern[] = "shared"
+
+# 禁用硬链接，改用符号链接（可选，避免路径隔离）
+link-workspace-packages = true
+symlink = true

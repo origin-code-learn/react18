@@ -12,6 +12,11 @@ import type {
     Update as ClassUpdate,
 } from './ReactFiberClassUpdateQueue.old';
 
+export type ConcurrentUpdate = {
+    next: ConcurrentUpdate,
+    lane: Lane,
+};
+
 export const unsafe_markUpdateLaneFromFiberToRoot = markUpdateLaneFromFiberToRoot;
 
 let concurrentQueues: Array<HookQueue<any, any> | ClassQueue<any>> | null = null

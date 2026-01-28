@@ -9,5 +9,11 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.9.0"
+  "packageManager": "pnpm@10.9.0",
+  "dependencies": {
+    "react": "workspace:*",
+    "react-dom": "workspace:*",
+    "scheduler": "workspace:*",
+    "shared": "workspace:*"
+  }
 }

@@ -12,7 +12,10 @@
         "forceConsistentCasingInFileNames": true,
         "declaration": true,
         "declarationMap": true,
-        "lib": ["ESNext", "DOM"],
+        "lib": [
+            "ESNext",
+            "DOM"
+        ],
         "moduleResolution": "Node",
         "strict": true,
         "noImplicitAny": false,
@@ -26,7 +29,21 @@
         "skipLibCheck": true,
         "baseUrl": "./packages",
         "paths": {
-            "ReactDOMHostConfig": ["./react-dom/src/client/ReactDOMHostConfig.ts"]
+            "ReactDOMHostConfig": [
+                "./react-dom/src/client/ReactDOMHostConfig.ts"
+            ],
+            "react-reconciler": [
+                "packages/react-reconciler/src"
+            ], // 直接指向源码
+            "react-reconciler/*": [
+                "packages/react-reconciler/src/*"
+            ],
+            "react-dom": [
+                "packages/react-dom/src"
+            ],
+            "react-dom/*": [
+                "packages/react-dom/src/*"
+            ]
         }
     },
 }

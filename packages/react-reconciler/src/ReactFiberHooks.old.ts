@@ -28,7 +28,7 @@ import {
 import { markWorkInProgressReceivedUpdate } from "./ReactFiberBeginWork.old"
 import { getIsHydrating } from "./ReactFiberHydrationContext.old"
 import { getTreeId } from "./ReactFiberTreeContext.old"
-import { ContinuousEventPriority, getCurrentUpdatePriority, higherEventPriority, setCurrentUpdatePriority } from "./ReactEventPriorities"
+import { ContinuousEventPriority, getCurrentUpdatePriority, higherEventPriority, setCurrentUpdatePriority } from "./ReactEventPriorities.old"
 import { now } from "./Scheduler"
 
 const { ReactCurrentDispatcher, ReactCurrentBatchConfig } = ReactSharedInternals
@@ -209,6 +209,7 @@ function dispatchSetState<S, A>(
 ) {
     // 根据当前 Fiber 节点获取合适的更新优先级（lane 表示优先级通道）
     const lane = requestUpdateLane(fiber)
+    console.log('----dispatchSetState----', action, lane)
     // 创建一个更新对象，包含此次更新的信息
     const update: Update<S, A> = {
         lane,    // 此次更新的优先级

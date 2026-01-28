@@ -5,7 +5,7 @@ import {
   getCurrentUpdatePriority,
   IdleEventPriority,
   setCurrentUpdatePriority
-} from "react-reconciler/src/ReactEventPriorities";
+} from "react-reconciler/src/ReactEventPriorities.old";
 import { DOMEventName } from "./DOMEventNames";
 import { EventSystemFlags, IS_CAPTURE_PHASE } from "./EventSystemFlags";
 import {

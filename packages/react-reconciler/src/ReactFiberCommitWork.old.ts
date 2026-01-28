@@ -29,7 +29,8 @@ import {
     hideInstance,
     unhideInstance,
     hideTextInstance,
-    unhideTextInstance
+    unhideTextInstance,
+    commitTextUpdate
 } from './ReactFiberHostConfig';
 import {
     NoFlags as NoHookEffect,
@@ -756,7 +757,26 @@ export function commitMutationEffectsOnFiber(
             return
         }
         case HostText: {
-            debugger
+            recursivelyTraverseMutationEffects(root, finishedWork, lanes)
+            commitReconciliationEffects(finishedWork)
+            if (flags & Update) {
+                if (supportsMutation) {
+                    if (finishedWork.stateNode === null) {
+                        throw new Error(
+                            'This should have a text node initialized. This error is likely ' +
+                            'caused by a bug in React. Please file an issue.',
+                        );
+                    }
+                    const textInstance: TextInstance = finishedWork.stateNode
+                    const newText: string = finishedWork.memoizedProps
+                    const oldText: string = current !== null ? current.memoizedProps : newText
+                    try {
+                        commitTextUpdate(textInstance, oldText, newText)
+                    } catch (error) {
+                        captureCommitPhaseError(finishedWork, finishedWork.return, error)
+                    }
+                }
+            }
         }
         case HostRoot: {
             recursivelyTraverseMutationEffects(root, finishedWork, lanes)

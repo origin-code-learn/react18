@@ -1,8 +1,8 @@
 import generatePackageJson from 'rollup-plugin-generate-package-json'
 import alias from '@rollup/plugin-alias'
-import { getPackageJOSN, resolvePkgPath, getBaseRollupPlugins } from './utils'
+import { getPackageJSON, resolvePkgPath, getBaseRollupPlugins } from './utils'
 
-const { name, module } = getPackageJOSN('react-dom')
+const { name, module } = getPackageJSON('react-dom')
 const pkgPath = resolvePkgPath(name)
 const pkgDistPath = resolvePkgPath(name, true)
 
@@ -14,16 +14,32 @@ const config = [
             {
                 file: `${pkgDistPath}/index.js`,
                 name: 'index.js',
-                format: 'umd'
+                format: 'umd',
+                globals: { // 修复：声明外部依赖的全局变量映射（PNPM 隔离下必须显式指定）
+                    'react': 'react',
+                    'shared': 'shared',
+                    'scheduler': 'scheduler',
+                    'react-reconciler': 'react-reconciler',
+                    'jsxDEV': 'jsxDEV',
+                    'jsxRuntime': 'jsxRuntime',
+                }
             },
             {
                 file: `${pkgDistPath}/client.ts`,
                 name: 'client.js',
-                format: 'umd'
+                format: 'umd',
+                globals: { // 修复：声明外部依赖的全局变量映射（PNPM 隔离下必须显式指定）
+                    'react': 'react',
+                    'shared': 'shared',
+                    'scheduler': 'scheduler',
+                    'react-reconciler': 'react-reconciler',
+                    'jsxDEV': 'jsxDEV',
+                    'jsxRuntime': 'jsxRuntime',
+                }
             }
         ],
-        plugins:[
-            ...getBaseRollupPlugins(), 
+        plugins: [
+            ...getBaseRollupPlugins(),
             alias({
                 entries: {
                     hostConfig: `${pkgPath}/src/hostConfig.ts`
@@ -32,7 +48,7 @@ const config = [
             generatePackageJson({
                 inputFolder: pkgPath,
                 outputFolder: pkgDistPath,
-                baseContents: ({name, description, version}) => ({
+                baseContents: ({ name, description, version }) => ({
                     name,
                     description,
                     version,
@@ -42,7 +58,13 @@ const config = [
                     }
                 })
             })
-        ]
+        ],
+        external: [
+            'react',
+            'react-reconciler',
+            'scheduler',
+            'shared'
+        ],
     },
     // jsx-runtime
     // {

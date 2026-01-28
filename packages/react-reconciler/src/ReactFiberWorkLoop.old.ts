@@ -14,7 +14,7 @@ import {
     shouldYield,
 } from "./Scheduler"
 import { LegacyRoot } from "./ReactRootTags";
-import { ContinuousEventPriority, DefaultEventPriority, DiscreteEventPriority, EventPriority, getCurrentUpdatePriority, IdleEventPriority, lanesToEventPriority, lowerEventPriority, setCurrentUpdatePriority } from "./ReactEventPriorities";
+import { ContinuousEventPriority, DefaultEventPriority, DiscreteEventPriority, EventPriority, getCurrentUpdatePriority, IdleEventPriority, lanesToEventPriority, lowerEventPriority, setCurrentUpdatePriority } from "./ReactEventPriorities.old";
 import ReactSharedInternals from "shared/ReactSharedInternals";
 import { ContextOnlyDispatcher, resetHooksAfterThrow } from "./ReactFiberHooks.old";
 import { cancelTimeout, getCurrentEventPriority, noTimeout, resetAfterCommit, scheduleMicrotask, scheduleTimeout, supportsMicrotasks } from "./ReactFiberHostConfig"
@@ -1239,6 +1239,7 @@ export function flushSync(fn) {
         //步骤6：强制刷新同步更新队列（仅在无渲染/提交上下文时）
         if ((executionContext & (RenderContext | CommitContext)) === NoContext) {
             flushSyncCallbacks()
+        } else {
         }
     }
 }
