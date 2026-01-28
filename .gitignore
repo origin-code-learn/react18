@@ -1,2 +1,49 @@
-/node_modules/
-.history
+
+# 忽略所有层级下的 node_modules（包括分包）
+**/node_modules/
+
+# 补充：同时忽略 Vite/Rollup 构建产物、缓存等（适配你的 React 仿写项目）
+# 1. 构建产物目录
+dist/
+packages/*/dist/
+# 2. Vite 缓存/预构建目录
+node_modules/.vite/
+.vite/
+# 3. Rollup 缓存
+.rollup.cache/
+# 4. TypeScript 编译产物
+*.tsbuildinfo
+packages/*/lib/
+packages/*/es/
+# 5. 日志/临时文件
+*.log
+tmp/
+# 6. IDE 配置（可选，根据自己的编辑器加）
+.idea/
+.vscode/
+*.swp
+*.swo
+# 忽略所有层级下的 node_modules（包括分包）
+**/node_modules/
+
+# 补充：同时忽略 Vite/Rollup 构建产物、缓存等（适配你的 React 仿写项目）
+# 1. 构建产物目录
+dist/
+packages/*/dist/
+# 2. Vite 缓存/预构建目录
+node_modules/.vite/
+.vite/
+# 3. Rollup 缓存
+.rollup.cache/
+# 4. TypeScript 编译产物
+*.tsbuildinfo
+packages/*/lib/
+packages/*/es/
+# 5. 日志/临时文件
+*.log
+tmp/
+# 6. IDE 配置（可选，根据自己的编辑器加）
+.idea/
+.vscode/
+*.swp
+*.swo
