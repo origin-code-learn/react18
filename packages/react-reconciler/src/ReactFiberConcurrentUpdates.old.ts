@@ -19,6 +19,7 @@ export type ConcurrentUpdate = {
 
 export const unsafe_markUpdateLaneFromFiberToRoot = markUpdateLaneFromFiberToRoot;
 
+// 全局数组: 暂存 “并发模式下的更新任务队列
 let concurrentQueues: Array<HookQueue<any, any> | ClassQueue<any>> | null = null
 // 将当前类组件的更新队列加入全局并发更新队列集合， 让 React 调度器（Scheduler）能够统一管理所有并发更新队列，按优先级处理更新。
 export function pushConcurrentUpdateQueue(
@@ -101,6 +102,7 @@ export function enqueueConcurrentClassUpdate<State>(
         update.next = update  // 新更新的 next 指向自身（循环链表的起点）
         pushConcurrentUpdateQueue(queue) // 将队列加入全局并发更新队列集合
     } else {
+        // 将 interleaved 的环链 追加到 next 的环链 中
         update.next = interleaved.next
         interleaved.next = update
     }
@@ -111,34 +113,7 @@ export function enqueueConcurrentClassUpdate<State>(
     return markUpdateLaneFromFiberToRoot(fiber, lane)
 }
 
-/**
- * 核心背景：React 的并发更新队列设计
- * 在并发渲染模式下，React 可能同时存在多个更新来源（如用户交互、定时器、网络请求等），这些更新会被临时存放在两种队列中：
- *  - pending 队列：主更新队列，存放当前正在处理或等待处理的更新。
- *  - interleaved 队列：交错更新队列，存放并发模式下被中断或延后处理的更新（如低优先级更新被高优先级更新打断后暂存）。
- * 这两种队列均采用循环链表结构（每个节点的 next 指针指向队列中的下一个更新，最后一个节点的 next 指向第一个节点，形成闭环），以高效支持更新的添加和合并。
-*/
-export function finishQueueingConcurrentUpdates() {
-    if (concurrentQueues !== null) {
-        for (let i = 0; i < concurrentQueues.length; i++) {
-            const queue: any = concurrentQueues[i]
-            const lastInterleavedUpdate = queue.interleaved
-            if (lastInterleavedUpdate !== null) {
-                queue.interleaved = null
-                const firstInterleavedUpdate = lastInterleavedUpdate.next
-                const lastPendingUpdate = queue.pending
-                if (lastPendingUpdate !== null) {
-                    const firstPendingUpdate = lastPendingUpdate.next
-                    lastPendingUpdate.next = firstInterleavedUpdate
-                    lastInterleavedUpdate.next = firstPendingUpdate
-                }
-                queue.pending = lastInterleavedUpdate
-            }
-        }
-        concurrentQueues = null
-    }
-}
-
+// 作用同 enqueueConcurrentClassUpdate，只是处理的是函数组件的更新
 export function enqueueConcurrentHookUpdate<S, A>(
     fiber: Fiber,
     queue: HookQueue<S, A>,
@@ -166,6 +141,35 @@ export function enqueueConcurrentHookUpdate<S, A>(
 
     // 标记从当前 Fiber 到根节点的更新通道，并返回根节点
     return markUpdateLaneFromFiberToRoot(fiber, lane)
+}
+
+/**
+ * 核心背景：React 的并发更新队列设计
+ * 在并发渲染模式下，React 可能同时存在多个更新来源（如用户交互、定时器、网络请求等），这些更新会被临时存放在两种队列中：
+ *  - pending 队列：主更新队列，存放当前正在处理或等待处理的更新。
+ *  - interleaved 队列：交错更新队列，存放并发模式下被中断或延后处理的更新（如低优先级更新被高优先级更新打断后暂存）。
+ * 这两种队列均采用循环链表结构（每个节点的 next 指针指向队列中的下一个更新，最后一个节点的 next 指向第一个节点，形成闭环），以高效支持更新的添加和合并。
+ * 该函数主要作用: 将 concurrentQueues 中存储的 每一个 queue 执行 queue.interleaved 和 queue.pending 两个循环链表的合并（将 interleaved 队列的更新合并到 pending 队列中）
+*/
+export function finishQueueingConcurrentUpdates() {
+    if (concurrentQueues !== null) {
+        for (let i = 0; i < concurrentQueues.length; i++) {
+            const queue: any = concurrentQueues[i]
+            const lastInterleavedUpdate = queue.interleaved
+            if (lastInterleavedUpdate !== null) {
+                queue.interleaved = null
+                const firstInterleavedUpdate = lastInterleavedUpdate.next
+                const lastPendingUpdate = queue.pending
+                if (lastPendingUpdate !== null) {
+                    const firstPendingUpdate = lastPendingUpdate.next
+                    lastPendingUpdate.next = firstInterleavedUpdate
+                    lastInterleavedUpdate.next = firstPendingUpdate
+                }
+                queue.pending = lastInterleavedUpdate
+            }
+        }
+        concurrentQueues = null
+    }
 }
 
 export function enqueueConcurrentHookUpdateAndEagerlyBailout<S, A>(
